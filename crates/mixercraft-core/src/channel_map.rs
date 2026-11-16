@@ -86,9 +86,8 @@ impl ChannelMap {
         let frames = src.frames().min(dst.frames());
         let srcs = self.src.min(src.channels());
         let dsts = self.dst.min(dst.channels());
-        for d in 0..dsts {
-            for s in 0..srcs {
-                let m = self.gains[d][s];
+        for (d, row) in self.gains.iter().enumerate().take(dsts) {
+            for (s, &m) in row.iter().enumerate().take(srcs) {
                 if m == 0.0 {
                     continue;
                 }
