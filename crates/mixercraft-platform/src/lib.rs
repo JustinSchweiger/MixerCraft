@@ -200,6 +200,8 @@ pub struct AudioSystem {
     virtual_devices: OnceLock<virtual_dev::Virtual>,
     /// Why starting virtual devices failed last time (retried on next use).
     virtual_error: std::sync::Mutex<Option<String>>,
+    /// Where the default-device roles of virtual devices are remembered.
+    virtual_memory_file: std::sync::Mutex<Option<std::path::PathBuf>>,
 }
 
 impl std::fmt::Debug for AudioSystem {
@@ -214,13 +216,26 @@ impl AudioSystem {
     pub fn new() -> Self {
         #[cfg(all(target_os = "linux", feature = "pipewire"))]
         if let Ok(host) = cpal::host_from_id(cpal::HostId::PipeWire) {
-            return Self { host, virtual_devices: OnceLock::new(), virtual_error: std::sync::Mutex::default() };
+            return Self {
+                host,
+                virtual_devices: OnceLock::new(),
+                virtual_error: std::sync::Mutex::default(),
+                virtual_memory_file: std::sync::Mutex::default(),
+            };
         }
         Self {
             host: cpal::default_host(),
             virtual_devices: OnceLock::new(),
             virtual_error: std::sync::Mutex::default(),
+            virtual_memory_file: std::sync::Mutex::default(),
         }
+    }
+
+    /// Where to remember which Windows default-device roles the user gave to
+    /// MixerCraft's virtual devices (restored after an engine restart). Set
+    /// it before the first virtual device opens.
+    pub fn set_virtual_memory_file(&self, file: std::path::PathBuf) {
+        *self.virtual_memory_file.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(file);
     }
 
     /// Whether virtual devices can be created; `Err` explains why not.
@@ -247,7 +262,8 @@ impl AudioSystem {
             return Ok(v);
         }
         let mut error = self.virtual_error.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        match virtual_dev::Virtual::start() {
+        let memory = self.virtual_memory_file.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        match virtual_dev::Virtual::start(memory) {
             Ok(v) => {
                 *error = None;
                 Ok(self.virtual_devices.get_or_init(|| v))
