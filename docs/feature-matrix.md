@@ -33,6 +33,7 @@ and runs the hardware-independent tests on all three platforms.
 | Engine before login | 🗓 service; startup-sound routing to be verified | ⛔ PipeWire is per user session | ⛔ firmware chime not routable |
 | Desktop GUI (mixer, routing, mute/solo, meters, knobs, device pickers, diagnostics, custom title bar) | 🟡 verified against the engine; settings pending | 🟡 builds in CI only | 🟡 builds in CI only |
 | Tray icon, close-to-tray, single instance | 🟡 icon registration, hide/show, second-launch activation and `--tray` verified; menu clicks not yet exercised | 🗓 tray via KSNI (no GTK); single instance works, closing quits | 🟡 same code as Windows, untested |
+| App icon and version info | ✅ embedded in all three executables; Explorer, taskbar (frameless window) and tray verified | 🟡 `.desktop` file and hicolor PNGs in `assets/linux/`, not installed until packages exist | 🟡 `.icns` in `assets/macos/`, no app bundle yet |
 | Installers | 🗓 MSI | 🗓 .deb / .rpm / AppImage | 🗓 .pkg / .dmg |
 | In-app updates | 🗓 | 🗓 (notify-only for distro packages) | 🗓 |
 

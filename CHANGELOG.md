@@ -50,6 +50,15 @@ All notable changes to this project are documented here. The format follows
   longer causes a seconds-long pitch correction.
 
 ### Added
+- The MixerCraft icon on the Windows executables (`mixercraft-gui.exe`,
+  `mixercraftd.exe`, `mixercraft.exe`) for Explorer, the taskbar, Alt-Tab
+  and Task Manager, plus version information (product "MixerCraft",
+  version from Cargo; Task Manager lists "MixerCraft", "MixerCraft engine"
+  and "MixerCraft command-line client"). Building on Windows now needs
+  `rc.exe` from the Windows SDK (installed with the MSVC build tools).
+  `assets/` also holds a Linux `.desktop` file with hicolor PNG icons and a
+  macOS `.icns` for future packages; `assets/generate-icons.py` regenerates
+  all of them from the app icon.
 - Noise suppression per input strip (RNNoise, "Denoise" in the app,
   `mixercraft fx <strip> --denoise on`): removes steady background noise and
   much of the noise between words while leaving speech untouched. Needs the
