@@ -14,12 +14,17 @@ name = "mixercraft-gui"
 path = "src/main.rs"
 
 [dependencies]
+mixercraft-config.workspace = true
 mixercraft-ipc.workspace = true
+mixercraft-platform.workspace = true
+serde.workspace = true
 mixercraft-update.workspace = true
 slint.workspace = true
+toml.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true
+winresource.workspace = true
 
 [lints]
 workspace = true

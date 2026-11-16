@@ -103,9 +103,8 @@ try {
 } finally { Pop-Location }
 
 # 3. Generated inputs: icon, license page, install marker.
-$ico = Get-ChildItem -Path (Join-Path $root "crates\mixercraft-gui") -Recurse -Filter "*.ico" -ErrorAction SilentlyContinue |
-    Select-Object -First 1 -ExpandProperty FullName
-if (-not $ico) {
+$ico = Join-Path $root "assets\windows\mixercraft.ico"
+if (-not (Test-Path $ico)) {
     # A PNG wrapped in an ICO container (supported since Windows Vista).
     $png = [IO.File]::ReadAllBytes((Join-Path $root "crates\mixercraft-gui\ui\icon.png"))
     $ico = Join-Path $work "mixercraft.ico"

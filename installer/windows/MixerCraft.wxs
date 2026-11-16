@@ -88,12 +88,12 @@
       <RegistryValue Root="HKCU" Key="Software\MixerCraft\Installer" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
     </Component>
 
-    <!-- Start with Windows: the tray app via the Run key; the engine via the
-         same Task Scheduler task as `mixercraft autostart enable` (custom
-         actions below), which starts earlier than the Run key. -->
+    <!-- Start with Windows: the same "MixerCraft" Task Scheduler task as the
+         Settings tab and `mixercraft autostart enable` with the app option (custom actions
+         below); the app opens in the tray and starts the engine. This
+         component only records the feature. -->
     <Component Id="AutostartGui" Directory="INSTALLFOLDER" Guid="242aa06d-840e-4ad4-9a27-316e8bed4a82">
-      <RegistryValue Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="MixerCraft"
-                     Type="string" Value="&quot;[#GuiExe]&quot; --tray" KeyPath="yes" />
+      <RegistryValue Root="HKCU" Key="Software\MixerCraft\Installer" Name="Autostart" Type="integer" Value="1" KeyPath="yes" />
     </Component>
 
     <!-- Windows Installer writes PATH as REG_EXPAND_SZ only if the value it
@@ -111,7 +111,7 @@
       <ComponentGroupRef Id="AppFiles" />
       <ComponentRef Id="StartMenuShortcut" />
       <Feature Id="Autostart" Title="Start with Windows" Level="1" AllowAdvertise="no"
-               Description="Starts the audio engine and the tray icon when you sign in.">
+               Description="Opens MixerCraft in the tray when you sign in; it starts the audio engine. Can be changed later on the Settings tab.">
         <ComponentRef Id="AutostartGui" />
       </Feature>
       <Feature Id="Desktop" Title="Desktop shortcut" Level="1" AllowAdvertise="no"
@@ -133,13 +133,21 @@
     <CustomAction Id="CloseMixerCraft" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
                   Execute="immediate" Return="ignore" />
 
-    <!-- Engine autostart task (Task Scheduler, no elevation). -->
-    <SetProperty Id="EnableEngineAutostart" Value="&quot;[INSTALLFOLDER]mixercraft.exe&quot; autostart enable"
-                 Before="EnableEngineAutostart" Sequence="execute" />
-    <CustomAction Id="EnableEngineAutostart" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
+    <!-- Sign-in start (Task Scheduler, no elevation). Set when the feature is
+         chosen on a new install or a modify, never on an upgrade, so a choice
+         made later on the Settings tab survives updates. -->
+    <SetProperty Id="EnableAppAutostart" Value="&quot;[INSTALLFOLDER]mixercraft.exe&quot; autostart enable --app"
+                 Before="EnableAppAutostart" Sequence="execute" />
+    <CustomAction Id="EnableAppAutostart" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
                   Execute="deferred" Impersonate="yes" Return="ignore" />
-    <!-- Removed only if it starts this installation's engine; the trailing
-         "\" keeps CommandLineToArgvW from reading \" as a quote. -->
+    <!-- On uninstall both sign-in tasks are removed, each only if it starts a
+         program of this installation; the trailing "\" keeps
+         CommandLineToArgvW from reading \" as a quote. -->
+    <SetProperty Id="DisableAppAutostart"
+                 Value="&quot;[INSTALLFOLDER]mixercraft.exe&quot; autostart disable --app --if-under &quot;[INSTALLFOLDER]\&quot;"
+                 Before="DisableAppAutostart" Sequence="execute" />
+    <CustomAction Id="DisableAppAutostart" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="yes" Return="ignore" />
     <SetProperty Id="DisableEngineAutostart"
                  Value="&quot;[INSTALLFOLDER]mixercraft.exe&quot; autostart disable --if-under &quot;[INSTALLFOLDER]\&quot;"
                  Before="DisableEngineAutostart" Sequence="execute" />
@@ -154,10 +162,12 @@
     <InstallExecuteSequence>
       <Custom Action="CloseMixerCraft" Before="InstallValidate"
               Condition="WIX_UPGRADE_DETECTED OR REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="DisableAppAutostart" Before="RemoveFiles"
+              Condition="(REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE) OR (&amp;Autostart=2 AND !Autostart=3)" />
       <Custom Action="DisableEngineAutostart" Before="RemoveFiles"
-              Condition="REMOVE~=&quot;ALL&quot; OR (&amp;Autostart=2 AND !Autostart=3)" />
-      <Custom Action="EnableEngineAutostart" After="InstallFiles"
-              Condition="&amp;Autostart=3 AND NOT REMOVE~=&quot;ALL&quot;" />
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="EnableAppAutostart" After="InstallFiles"
+              Condition="&amp;Autostart=3 AND !Autostart&lt;&gt;3 AND NOT WIX_UPGRADE_DETECTED AND NOT REMOVE~=&quot;ALL&quot;" />
       <Custom Action="LaunchApp" After="InstallFinalize"
               Condition="LAUNCHAPP=1 AND NOT REMOVE~=&quot;ALL&quot;" />
     </InstallExecuteSequence>

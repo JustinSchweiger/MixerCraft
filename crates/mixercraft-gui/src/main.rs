@@ -4,8 +4,8 @@
 //! crash or restart at any time without affecting audio.
 //!
 //! On Windows and macOS the app lives in the system tray: closing the window
-//! hides it, and a second launch shows the running instance. `--tray` starts
-//! hidden (for sign-in).
+//! hides it (unless the Settings tab says to quit), and a second launch shows
+//! the running instance. `--tray` starts hidden (for sign-in).
 
 // No console window for the GUI on Windows (release builds).
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
@@ -14,16 +14,18 @@ mod engine;
 mod fader_law;
 mod fx_law;
 mod meters;
+mod settings;
 #[cfg(any(windows, target_os = "macos"))]
 mod tray;
 mod update;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use mixercraft_ipc::{DeviceChoice, DeviceSummary, EngineState, EngineStatus};
+use mixercraft_ipc::{DeviceChoice, DeviceSummary, EngineSettings, EngineState, EngineStatus, LatencyProfile};
 use slint::{Color, ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::engine::{Cmd, Update};
@@ -40,13 +42,30 @@ use crate::engine::{Cmd, Update};
 mod ui {
     slint::include_modules!();
 }
-use ui::{DeviceRow, MainWindow, MeterView, StripView, UpdateView};
+use ui::{DeviceRow, MainWindow, MeterView, SettingKind, SettingsState, StripView, UpdateView};
 
 /// After a local edit, status polls do not overwrite that strip for this long
 /// (the engine may not have applied the change yet).
 const LOCAL_EDIT_GRACE: Duration = Duration::from_millis(1500);
+/// After an engine setting changes, a status answer already on its way does
+/// not overwrite it for this long.
+const SETTINGS_EDIT_GRACE: Duration = Duration::from_millis(400);
+/// Where usbip-win2 (needed for virtual devices on Windows) is published.
+const USBIP_WIN2_URL: &str = "https://github.com/vadimgrn/usbip-win2/releases";
+
+/// The engine's configured settings and its buses (id, name, clocks the
+/// engine) from the last status.
+#[derive(Debug, Default)]
+struct EngineSettingsView {
+    settings: EngineSettings,
+    buses: Vec<(String, String, bool)>,
+    edited: Option<Instant>,
+}
 
 thread_local! {
+    /// The connected engine predates this app (reports no noise-suppression
+    /// availability).
+    static ENGINE_OUTDATED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static LOCAL_EDITS: RefCell<HashMap<(bool, usize), Instant>> = RefCell::new(HashMap::new());
     /// What each entry of the input / output device pickers selects.
     static DEVICE_CHOICES: RefCell<(Vec<DeviceChoice>, Vec<DeviceChoice>)> = const { RefCell::new((Vec::new(), Vec::new())) };
@@ -60,6 +79,18 @@ thread_local! {
     static LAST_TITLE_PRESS: RefCell<Option<Instant>> = const { RefCell::new(None) };
     #[cfg(any(windows, target_os = "macos"))]
     static TRAY: RefCell<Option<tray::Tray>> = const { RefCell::new(None) };
+    /// App preferences and the file they are saved to.
+    static GUI_SETTINGS: RefCell<(Option<PathBuf>, settings::GuiSettings)> = RefCell::new((None, settings::GuiSettings::default()));
+    static ENGINE_SETTINGS: RefCell<EngineSettingsView> = RefCell::new(EngineSettingsView::default());
+}
+
+fn gui_settings() -> settings::GuiSettings {
+    GUI_SETTINGS.with(|g| g.borrow().1)
+}
+
+/// Whether the close button hides the window instead of quitting.
+fn hides_to_tray() -> bool {
+    has_tray() && gui_settings().close_to_tray
 }
 
 /// Whether a tray icon exists (closing the window then only hides it).
@@ -256,9 +287,16 @@ fn sync_rows(current: ModelRc<StripView>, fresh: Vec<StripView>, bus: bool) -> O
 
 fn apply_status(ui: &MainWindow, s: &EngineStatus) {
     ui.set_connected(true);
+    apply_engine_settings(ui, s);
     apply_devices(ui, None, Some(s.virtual_devices));
-    if ui.get_denoise_available() != s.noise_suppression_available {
-        ui.set_denoise_available(s.noise_suppression_available);
+    let available = s.noise_suppression_available == Some(true);
+    if ui.get_denoise_available() != available {
+        ui.set_denoise_available(available);
+    }
+    // An engine started before an update keeps running the old version.
+    let outdated = s.noise_suppression_available.is_none();
+    if ENGINE_OUTDATED.with(|o| o.replace(outdated)) != outdated && outdated {
+        show_notice(ui, OUTDATED_ENGINE.into());
     }
     BUS_KEEP_AWAKE.with(|k| *k.borrow_mut() = s.buses.iter().map(|b| b.keep_awake).collect());
 
@@ -374,8 +412,256 @@ fn apply_meters(model: &ModelRc<MeterView>, values: &[[f32; 4]]) {
     if m.row_count() != values.len() {
         return; // the next status update resizes the model
     }
+    let hold = gui_settings().peak_hold;
     for (i, v) in values.iter().enumerate() {
-        m.set_row_data(i, MeterView { l: v[0], r: v[1], lp: v[2], rp: v[3] });
+        let (lp, rp) = if hold { (v[2], v[3]) } else { (0.0, 0.0) };
+        m.set_row_data(i, MeterView { l: v[0], r: v[1], lp, rp });
+    }
+}
+
+/// "44.1 kHz", "48 kHz".
+fn khz(rate: u32) -> String {
+    format!("{} kHz", f64::from(rate) / 1000.0)
+}
+
+/// Picker label of a bus.
+fn bus_label(id: &str, name: &str) -> String {
+    if id == name { id.to_owned() } else { format!("{id} · {name}") }
+}
+
+/// Explains the virtual device state in the user's terms.
+fn virtual_note(available: bool, note: &str) -> String {
+    if available {
+        String::new()
+    } else if note.contains("usbip-win2 is not installed") {
+        "Needs the free usbip-win2 driver. Installing it needs administrator rights and briefly restarts the \
+         USB hubs."
+            .into()
+    } else if note.is_empty() {
+        "Unavailable.".into()
+    } else {
+        let mut c = note.chars();
+        c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+    }
+}
+
+/// Virtual device state from this machine (while no engine is connected).
+fn set_local_virtual_state(st: &mut SettingsState) {
+    let reason = mixercraft_platform::virtual_dev::unavailable_reason();
+    st.virtual_available = reason.is_none();
+    st.virtual_note = virtual_note(reason.is_none(), reason.unwrap_or_default()).into();
+    st.usbip_link = cfg!(windows) && mixercraft_platform::virtual_dev::usbip_exe().is_none();
+}
+
+/// Fills the engine part of the Settings tab from `view`.
+fn engine_fields(st: &mut SettingsState, view: &EngineSettingsView) {
+    let e = &view.settings;
+    st.sample_rate_index = match e.sample_rate {
+        44_100 => 0,
+        48_000 => 1,
+        _ => -1,
+    };
+    st.latency_index = match e.latency_profile {
+        LatencyProfile::LowLatency => 0,
+        LatencyProfile::Balanced => 1,
+        LatencyProfile::MaxStability => 2,
+    };
+    let clock = view.buses.iter().find(|b| b.2).map(|b| bus_label(&b.0, &b.1));
+    let automatic = clock.as_ref().map_or_else(|| "Automatic".to_owned(), |c| format!("Automatic ({c})"));
+    let mut options = vec![SharedString::from("Automatic: first bus with a device")];
+    options.extend(view.buses.iter().map(|b| SharedString::from(bus_label(&b.0, &b.1))));
+    if st.master_options.iter().ne(options.iter().cloned()) {
+        st.master_options = ModelRc::new(VecModel::from(options));
+    }
+    st.master_text = match &e.master_bus {
+        None => automatic.into(),
+        Some(id) => view.buses.iter().find(|b| &b.0 == id).map_or_else(|| id.clone(), |b| bus_label(&b.0, &b.1)).into(),
+    };
+}
+
+fn apply_engine_settings(ui: &MainWindow, s: &EngineStatus) {
+    let recent = ENGINE_SETTINGS.with(|v| {
+        let mut v = v.borrow_mut();
+        v.buses = s.buses.iter().map(|b| (b.id.clone(), b.name.clone(), b.master)).collect();
+        let recent = v.edited.is_some_and(|t| t.elapsed() < SETTINGS_EDIT_GRACE);
+        if !recent && let Some(settings) = &s.settings {
+            v.settings = settings.clone();
+        }
+        recent
+    });
+    if recent {
+        return;
+    }
+    let mut st = ui.get_settings();
+    let before = st.clone();
+    // An engine from before this app cannot report or change its settings.
+    st.engine_outdated = s.settings.is_none();
+    ENGINE_SETTINGS.with(|v| engine_fields(&mut st, &v.borrow()));
+    let configured = s.settings.as_ref().map_or(s.sample_rate, |e| e.sample_rate);
+    let mut detail = format!("Running at {}.", khz(s.sample_rate));
+    if st.sample_rate_index < 0 {
+        detail.push_str(&format!(" The configuration file asks for {}.", khz(configured)));
+    } else if !s.restart_required && configured != s.sample_rate {
+        detail.push_str(" The clock device does not offer the chosen rate, so the engine uses the device's rate.");
+    }
+    detail.push_str(" Noise suppression needs 48 kHz.");
+    st.rate_detail = detail.into();
+    st.restart_required = s.restart_required;
+    st.config_path = s.config_path.as_str().into();
+    st.virtual_available = s.virtual_devices;
+    st.virtual_note = virtual_note(s.virtual_devices, &s.virtual_devices_note).into();
+    st.usbip_link = cfg!(windows) && mixercraft_platform::virtual_dev::usbip_exe().is_none();
+    if st != before {
+        ui.set_settings(st);
+    }
+}
+
+/// Changes an engine setting: tells the engine and shows it at once.
+fn change_engine_settings(ui: &MainWindow, tx: &mpsc::Sender<Cmd>, f: impl FnOnce(&mut EngineSettings, &[String])) {
+    let changed = ENGINE_SETTINGS.with(|v| {
+        let mut v = v.borrow_mut();
+        let ids: Vec<String> = v.buses.iter().map(|b| b.0.clone()).collect();
+        let mut next = v.settings.clone();
+        f(&mut next, &ids);
+        if next == v.settings {
+            return None;
+        }
+        v.settings = next.clone();
+        v.edited = Some(Instant::now());
+        Some(next)
+    });
+    let Some(next) = changed else { return };
+    let _ = tx.send(Cmd::EngineSettings(next));
+    let mut st = ui.get_settings();
+    ENGINE_SETTINGS.with(|v| engine_fields(&mut st, &v.borrow()));
+    ui.set_settings(st);
+}
+
+/// Changes and saves an app preference.
+fn change_gui_settings(ui: &MainWindow, f: impl FnOnce(&mut settings::GuiSettings)) {
+    let (path, gs) = GUI_SETTINGS.with(|g| {
+        let mut g = g.borrow_mut();
+        f(&mut g.1);
+        (g.0.clone(), g.1)
+    });
+    let mut st = ui.get_settings();
+    st.close_to_tray = gs.close_to_tray;
+    st.peak_hold = gs.peak_hold;
+    ui.set_settings(st);
+    if let Some(path) = path
+        && let Err(e) = settings::save(&path, &gs)
+    {
+        show_notice(ui, format!("Cannot save the settings to {}: {e}", path.display()));
+    }
+}
+
+/// Opens a web address or folder with the system's default handler.
+fn open_external(target: &std::ffi::OsStr) {
+    let tool = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let _ = std::process::Command::new(tool).arg(target).spawn();
+}
+
+/// What the sign-in registration of the app starts.
+fn app_autostart_spec() -> Result<mixercraft_platform::autostart::AutostartSpec, String> {
+    let program = std::env::current_exe().map_err(|e| format!("cannot locate this program: {e}"))?;
+    Ok(mixercraft_platform::autostart::AutostartSpec { program, args: vec!["--tray".into()] })
+}
+
+/// What the sign-in registration of the engine starts: `mixercraftd` next
+/// to this program, with the configuration file this app was told to use.
+fn engine_autostart_spec() -> Result<mixercraft_platform::autostart::AutostartSpec, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("cannot locate this program: {e}"))?;
+    let program = exe.with_file_name(format!("mixercraftd{}", std::env::consts::EXE_SUFFIX));
+    if !program.is_file() {
+        return Err(format!("mixercraftd not found next to the app ({})", program.display()));
+    }
+    let mut args = Vec::new();
+    if let Some(config) = std::env::var_os("MIXERCRAFT_CONFIG").filter(|c| !c.is_empty()) {
+        args.push("--config".into());
+        args.push(config.to_string_lossy().into_owned());
+    }
+    Ok(mixercraft_platform::autostart::AutostartSpec { program, args })
+}
+
+/// Reads (and with `change` first sets) the sign-in registrations on a
+/// background thread; Task Scheduler calls take a moment.
+fn autostart_task(ui: &MainWindow, change: Option<(bool, bool)>) {
+    use mixercraft_platform::autostart::{self, AutostartState};
+    if !autostart::app_supported() {
+        return;
+    }
+    let mut st = ui.get_settings();
+    st.autostart_busy = true;
+    ui.set_settings(st);
+    let w = ui.as_weak();
+    let _ = std::thread::Builder::new().name("mixercraft-gui-autostart".into()).spawn(move || {
+        let result = match change {
+            Some((true, true)) => {
+                app_autostart_spec().and_then(|s| autostart::enable_app(&s).map_err(|e| e.to_string()))
+            }
+            Some((true, false)) => autostart::disable_app().map_err(|e| e.to_string()),
+            Some((false, true)) => {
+                engine_autostart_spec().and_then(|s| autostart::enable(&s, false).map_err(|e| e.to_string()))
+            }
+            Some((false, false)) => autostart::disable().map_err(|e| e.to_string()),
+            None => Ok(()),
+        };
+        let enabled = |s: Result<AutostartState, _>| matches!(s, Ok(AutostartState::Enabled { .. }));
+        let (app, engine) = (enabled(autostart::app_status()), enabled(autostart::status()));
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = w.upgrade() else { return };
+            let mut st = ui.get_settings();
+            st.autostart_busy = false;
+            st.app_autostart = app;
+            st.engine_autostart = engine;
+            ui.set_settings(st);
+            if let Err(e) = result {
+                show_notice(&ui, format!("Cannot change the sign-in start: {e}"));
+            }
+        });
+    });
+}
+
+/// Handles a control on the Settings tab.
+fn on_setting(ui: &MainWindow, tx: &mpsc::Sender<Cmd>, kind: SettingKind, value: i32) {
+    let on = value != 0;
+    match kind {
+        SettingKind::AppAutostart => autostart_task(ui, Some((true, on))),
+        SettingKind::EngineAutostart => autostart_task(ui, Some((false, on))),
+        SettingKind::CloseToTray => change_gui_settings(ui, |g| g.close_to_tray = on),
+        SettingKind::PeakHold => change_gui_settings(ui, |g| g.peak_hold = on),
+        SettingKind::SampleRate => {
+            change_engine_settings(ui, tx, |e, _| e.sample_rate = if value == 0 { 44_100 } else { 48_000 });
+        }
+        SettingKind::Latency => change_engine_settings(ui, tx, |e, _| {
+            e.latency_profile = match value {
+                0 => LatencyProfile::LowLatency,
+                2 => LatencyProfile::MaxStability,
+                _ => LatencyProfile::Balanced,
+            };
+        }),
+        SettingKind::MasterBus => change_engine_settings(ui, tx, |e, ids| {
+            e.master_bus = usize::try_from(value - 1).ok().and_then(|i| ids.get(i).cloned());
+        }),
+        SettingKind::RestartEngine => {
+            let _ = tx.send(Cmd::RestartEngine);
+        }
+        SettingKind::StartEngine => {
+            let _ = tx.send(Cmd::StartEngine);
+        }
+        SettingKind::GetUsbip => open_external(USBIP_WIN2_URL.as_ref()),
+        SettingKind::OpenConfigFolder => {
+            let path = PathBuf::from(ui.get_settings().config_path.as_str());
+            if let Some(dir) = path.parent() {
+                open_external(dir.as_os_str());
+            }
+        }
     }
 }
 
@@ -383,6 +669,10 @@ fn apply(ui: &MainWindow, update: Update) {
     match update {
         Update::Disconnected { hint } => {
             ui.set_connected(false);
+            let mut st = ui.get_settings();
+            set_local_virtual_state(&mut st);
+            st.restart_required = false;
+            ui.set_settings(st);
             ui.set_status_text("Engine not running".into());
             ui.set_status_color(Color::from_rgb_u8(0x7c, 0x85, 0x92));
             ui.set_connection_hint(hint.into());
@@ -406,6 +696,10 @@ fn apply(ui: &MainWindow, update: Update) {
 }
 
 /// Shows a message from the engine for a few seconds.
+/// Shown when the engine still runs a version from before an update.
+const OUTDATED_ENGINE: &str =
+    "The running engine is an older version. Stop and start it (tray menu) to use the new features.";
+
 fn show_notice(ui: &MainWindow, text: String) {
     let text = SharedString::from(text);
     ui.set_notice(text.clone());
@@ -457,6 +751,22 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_strip_meters(ModelRc::new(VecModel::<MeterView>::default()));
     ui.set_bus_meters(ModelRc::new(VecModel::<MeterView>::default()));
     ui.set_status_text("Connecting…".into());
+
+    let settings_path = settings::path();
+    let gui = settings_path.as_deref().map(settings::load).unwrap_or_default();
+    GUI_SETTINGS.with(|g| *g.borrow_mut() = (settings_path, gui));
+    let mut st = SettingsState {
+        autostart_supported: mixercraft_platform::autostart::app_supported(),
+        has_tray: cfg!(any(windows, target_os = "macos")),
+        close_to_tray: gui.close_to_tray,
+        peak_hold: gui.peak_hold,
+        sample_rate_index: 1,
+        latency_index: 1,
+        ..SettingsState::default()
+    };
+    set_local_virtual_state(&mut st);
+    ui.set_settings(st);
+    autostart_task(&ui, None);
 
     let (tx, rx) = mpsc::channel::<Cmd>();
     let weak = ui.as_weak();
@@ -551,7 +861,12 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_strip_denoise(move |i| {
         let ui = w.unwrap();
         if !ui.get_denoise_available() {
-            show_notice(&ui, "Noise suppression needs the engine to run at 48 kHz.".into());
+            let why = if ENGINE_OUTDATED.with(std::cell::Cell::get) {
+                OUTDATED_ENGINE
+            } else {
+                "Noise suppression needs the engine to run at 48 kHz."
+            };
+            show_notice(&ui, why.into());
             return;
         }
         let mut knobs = None;
@@ -656,6 +971,13 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_start_engine(move || {
         let _ = t.send(Cmd::StartEngine);
     });
+    let w = ui.as_weak();
+    let t = tx.clone();
+    ui.on_setting_changed(move |kind, value| {
+        if let Some(ui) = w.upgrade() {
+            on_setting(&ui, &t, kind, value);
+        }
+    });
 
     if let Some(listener) = instance {
         let w = ui.as_weak();
@@ -686,14 +1008,14 @@ fn main() -> Result<(), slint::PlatformError> {
     drop(tx);
 
     ui.window().on_close_requested(|| {
-        if !has_tray() {
+        if !hides_to_tray() {
             let _ = slint::quit_event_loop();
         }
         slint::CloseRequestResponse::HideWindow
     });
     let w = ui.as_weak();
     ui.on_close_window(move || {
-        if has_tray() {
+        if hides_to_tray() {
             if let Some(ui) = w.upgrade() {
                 let _ = ui.hide();
             }
@@ -899,6 +1221,9 @@ fn install_tray(ui: &MainWindow, tx: mpsc::Sender<Cmd>) {
             // must be visible.
             eprintln!("no tray icon: {e}");
             if let Some(ui) = w.upgrade() {
+                let mut st = ui.get_settings();
+                st.has_tray = false;
+                ui.set_settings(st);
                 show_window(&ui);
             }
         }

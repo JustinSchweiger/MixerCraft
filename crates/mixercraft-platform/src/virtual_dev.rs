@@ -23,7 +23,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -38,7 +38,7 @@ pub const ID_PREFIX: &str = "virtual:";
 /// Endpoint product names start with this ("MixerCraft Game").
 pub const PRODUCT_PREFIX: &str = "MixerCraft ";
 /// How long after connecting a device the previous defaults are enforced.
-const RESTORE_WINDOW: Duration = Duration::from_secs(15);
+const RESTORE_WINDOW: Duration = Duration::from_secs(6);
 /// Longest wait for `usbip attach`.
 const ATTACH_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -146,7 +146,7 @@ impl fmt::Debug for Virtual {
 }
 
 impl Virtual {
-    pub(crate) fn start() -> Result<Self, String> {
+    pub(crate) fn start(memory_file: Option<PathBuf>) -> Result<Self, String> {
         if let Some(why) = unavailable_reason() {
             return Err(why.into());
         }
@@ -159,7 +159,7 @@ impl Virtual {
         let (worker_labels, worker_changed) = (Arc::clone(&labels), Arc::clone(&labels_changed));
         std::thread::Builder::new()
             .name("mixercraft-virtual-attach".into())
-            .spawn(move || attach_worker(&rx, &worker_labels, &worker_changed))
+            .spawn(move || attach_worker(&rx, &worker_labels, &worker_changed, DefaultMemory::load(memory_file)))
             .map_err(|e| e.to_string())?;
         Ok(Self { server, jobs, labels, labels_changed })
     }
@@ -284,9 +284,143 @@ fn apply_labels(labels: &Labels) {
     }
 }
 
+/// Default-device roles the user gave to MixerCraft virtual devices.
+///
+/// The devices disappear while the engine is stopped, and Windows moves
+/// those roles to other devices and does not move them back. This keeps
+/// `(flow, role) -> device name` (e.g. "MixerCraft Input 1"), saved in a
+/// small file, and gives the role back once per reappearance of the device.
+/// A role the user moves away while the device is present is forgotten.
+struct DefaultMemory {
+    file: Option<PathBuf>,
+    roles: HashMap<(Flow, Role), String>,
+    /// Roles already given back since their device (re)appeared.
+    restored: HashSet<(Flow, Role)>,
+}
+
+use mixercraft_winaudio::{Flow, Role};
+
+fn flow_name(f: Flow) -> &'static str {
+    if f == Flow::Render { "render" } else { "capture" }
+}
+
+fn role_name(r: Role) -> &'static str {
+    match r {
+        Role::Console => "console",
+        Role::Multimedia => "multimedia",
+        Role::Communications => "communications",
+    }
+}
+
+impl DefaultMemory {
+    fn load(file: Option<PathBuf>) -> Self {
+        let mut roles = HashMap::new();
+        if let Some(text) = file.as_deref().and_then(|f| std::fs::read_to_string(f).ok()) {
+            roles = parse_memory(&text);
+        }
+        Self { file, roles, restored: HashSet::new() }
+    }
+
+    fn save(&self) {
+        let Some(file) = &self.file else { return };
+        let mut lines: Vec<String> =
+            self.roles.iter().map(|((f, r), name)| format!("{}\t{}\t{name}", flow_name(*f), role_name(*r))).collect();
+        lines.sort();
+        let text = format!(
+            "# Default devices given to MixerCraft virtual devices (restored after a restart).\n{}\n",
+            lines.join("\n")
+        );
+        let _ = write_atomically(file, &text);
+    }
+
+    /// Gives remembered roles back to devices that (re)appeared, then
+    /// records the current choice.
+    fn sync(&mut self) {
+        let (Ok(endpoints), Ok(mut current)) = (mixercraft_winaudio::endpoints(), mixercraft_winaudio::snapshot())
+        else {
+            return;
+        };
+        let ours: Vec<(&str, Flow, &str)> = endpoints
+            .iter()
+            .filter(|e| e.device_name.starts_with(PRODUCT_PREFIX))
+            .map(|e| (e.id.as_str(), e.flow, e.device_name.as_str()))
+            .collect();
+        let find =
+            |flow: Flow, name: &str| ours.iter().find(|(_, f, n)| *f == flow && *n == name).map(|(id, _, _)| *id);
+
+        let mut gave_back = false;
+        for ((flow, role), name) in &self.roles {
+            match find(*flow, name) {
+                Some(id) => {
+                    if self.restored.insert((*flow, *role)) && current.get(*flow, *role) != Some(id) {
+                        gave_back |= mixercraft_winaudio::set_default(id, *role).is_ok();
+                    }
+                }
+                None => {
+                    self.restored.remove(&(*flow, *role));
+                }
+            }
+        }
+        if gave_back && let Ok(now) = mixercraft_winaudio::snapshot() {
+            current = now;
+        }
+
+        let mut changed = false;
+        for (flow, role, id) in &current.entries {
+            if let Some((_, _, name)) = ours.iter().find(|(i, _, _)| i == id) {
+                if self.roles.get(&(*flow, *role)).map(String::as_str) != Some(*name) {
+                    self.roles.insert((*flow, *role), (*name).to_owned());
+                    self.restored.insert((*flow, *role));
+                    changed = true;
+                }
+            } else if let Some(name) = self.roles.get(&(*flow, *role))
+                && find(*flow, name).is_some()
+                && self.restored.contains(&(*flow, *role))
+            {
+                // The device is here and was given its role back, yet the
+                // user chose another device: forget.
+                self.roles.remove(&(*flow, *role));
+                changed = true;
+            }
+        }
+        if changed {
+            self.save();
+        }
+    }
+}
+
+fn parse_memory(text: &str) -> HashMap<(Flow, Role), String> {
+    let mut roles = HashMap::new();
+    for line in text.lines().filter(|l| !l.trim_start().starts_with('#')) {
+        let mut parts = line.splitn(3, '\t');
+        let (Some(f), Some(r), Some(name)) = (parts.next(), parts.next(), parts.next()) else { continue };
+        let flow = match f {
+            "render" => Flow::Render,
+            "capture" => Flow::Capture,
+            _ => continue,
+        };
+        let role = match r {
+            "console" => Role::Console,
+            "multimedia" => Role::Multimedia,
+            "communications" => Role::Communications,
+            _ => continue,
+        };
+        if name.starts_with(PRODUCT_PREFIX) {
+            roles.insert((flow, role), name.to_owned());
+        }
+    }
+    roles
+}
+
+fn write_atomically(file: &Path, text: &str) -> std::io::Result<()> {
+    let tmp = file.with_extension("tmp");
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, file)
+}
+
 /// Connects devices one at a time, keeps the user's default devices, names
 /// the endpoints, and reports devices that Windows dropped.
-fn attach_worker(rx: &Receiver<Job>, labels: &Labels, labels_changed: &AtomicBool) {
+fn attach_worker(rx: &Receiver<Job>, labels: &Labels, labels_changed: &AtomicBool, mut memory: DefaultMemory) {
     let mut watched: Vec<Watched> = Vec::new();
     let mut next_label_check = Instant::now();
     // Defaults before the current burst of attaches, and until when to
@@ -326,6 +460,7 @@ fn attach_worker(rx: &Receiver<Job>, labels: &Labels, labels_changed: &AtomicBoo
         }
         if labels_changed.swap(false, Ordering::Relaxed) || Instant::now() >= next_label_check {
             apply_labels(labels);
+            memory.sync();
             next_label_check = Instant::now() + LABEL_CHECK;
         }
         watched.retain_mut(|w| {
@@ -358,6 +493,24 @@ pub(crate) fn unavailable(name: &str, why: &str) -> PlatformError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_memory_file_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("mixercraft-defaults-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("virtual-defaults.txt");
+        let mut m = DefaultMemory::load(Some(file.clone()));
+        assert!(m.roles.is_empty());
+        m.roles.insert((Flow::Render, Role::Console), "MixerCraft Input 1".into());
+        m.roles.insert((Flow::Capture, Role::Communications), "MixerCraft Chat".into());
+        m.save();
+        let back = DefaultMemory::load(Some(file));
+        assert_eq!(back.roles, m.roles);
+        // Foreign or malformed lines are ignored.
+        let parsed = parse_memory("render\tconsole\tSpeakers\nbogus\ncapture\tconsole\tMixerCraft X\n");
+        assert_eq!(parsed.len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn names_and_ids() {

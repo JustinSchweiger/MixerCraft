@@ -140,8 +140,12 @@ enum Cmd {
 
 #[derive(Debug, Subcommand)]
 enum AutostartCmd {
-    /// Register the engine to start at sign-in.
+    /// Register the engine (or with --app the desktop app) to start at sign-in.
     Enable {
+        /// Open the desktop app in the tray at sign-in instead (it starts the
+        /// engine itself; Windows only). Same as the Settings tab.
+        #[arg(long, conflicts_with_all = ["config", "engine", "now"])]
+        app: bool,
         /// Configuration file the engine should use (default: per-user config).
         #[arg(long)]
         config: Option<std::path::PathBuf>,
@@ -152,14 +156,17 @@ enum AutostartCmd {
         #[arg(long)]
         now: bool,
     },
-    /// Remove the sign-in registration.
+    /// Remove the engine's (or with --app the desktop app's) sign-in registration.
     Disable {
-        /// Only if the registered engine lies in this folder (the
+        /// The desktop app's registration instead of the engine's.
+        #[arg(long)]
+        app: bool,
+        /// Only if the registered program lies in this folder (the
         /// uninstaller leaves a registration of another copy alone).
         #[arg(long)]
         if_under: Option<std::path::PathBuf>,
     },
-    /// Show whether autostart is registered.
+    /// Show whether the engine and the desktop app start at sign-in.
     Status,
 }
 
@@ -235,11 +242,16 @@ fn main() -> anyhow::Result<()> {
             fx.eq_mid_db = mid.unwrap_or(fx.eq_mid_db);
             fx.eq_high_db = high.unwrap_or(fx.eq_high_db);
             if let Some(d) = denoise {
-                if d == OnOff::On && !s.noise_suppression_available {
-                    anyhow::bail!(
+                match (d, s.noise_suppression_available) {
+                    (OnOff::On, None) => anyhow::bail!(
+                        "the running engine is older than this mixercraft and has no noise suppression; \
+                         restart it (`mixercraft shutdown`, then start mixercraftd or the app)"
+                    ),
+                    (OnOff::On, Some(false)) => anyhow::bail!(
                         "noise suppression needs the engine to run at 48 kHz (it runs at {} Hz)",
                         s.sample_rate
-                    );
+                    ),
+                    _ => {}
                 }
                 fx.noise_suppression = d.into();
             }
@@ -376,7 +388,15 @@ fn print_device(name: &str, id: &str, is_input: bool, is_output: bool, is_defaul
 fn autostart(action: &AutostartCmd) -> anyhow::Result<()> {
     use mixercraft_platform::autostart::{self, AutostartSpec, AutostartState};
     match action {
-        AutostartCmd::Enable { config, engine, now } => {
+        AutostartCmd::Enable { app: true, .. } => {
+            let exe = std::env::current_exe().context("cannot locate this program")?;
+            let gui = exe.with_file_name(format!("mixercraft-gui{}", std::env::consts::EXE_SUFFIX));
+            let gui = std::fs::canonicalize(&gui).with_context(|| format!("app not found at {}", gui.display()))?;
+            let spec = AutostartSpec { program: strip_verbatim(&gui).into(), args: vec!["--tray".into()] };
+            autostart::enable_app(&spec)?;
+            println!("app autostart enabled: {}", spec.program.display());
+        }
+        AutostartCmd::Enable { config, engine, now, .. } => {
             let engine = match engine {
                 Some(p) => p.clone(),
                 None => {
@@ -393,34 +413,46 @@ fn autostart(action: &AutostartCmd) -> anyhow::Result<()> {
                 args.push("--config".to_owned());
                 args.push(strip_verbatim(&config));
             }
-            let spec = AutostartSpec { engine: strip_verbatim(&engine).into(), args };
+            let spec = AutostartSpec { program: strip_verbatim(&engine).into(), args };
             autostart::enable(&spec, *now)?;
-            println!("autostart enabled: {}", spec.engine.display());
+            println!("autostart enabled: {}", spec.program.display());
             if *now {
                 println!("engine started");
             }
         }
-        AutostartCmd::Disable { if_under } => {
+        AutostartCmd::Disable { app, if_under } => {
+            let what = if *app { "app autostart" } else { "autostart" };
             if let Some(dir) = if_under {
-                match autostart::registered_engine()? {
-                    Some(engine) if path_is_under(&engine, dir) => {}
-                    Some(engine) => {
-                        println!("autostart left alone: it starts {}", engine.display());
+                let registered = if *app { autostart::registered_app()? } else { autostart::registered_engine()? };
+                match registered {
+                    Some(program) if path_is_under(&program, dir) => {}
+                    Some(program) => {
+                        println!("{what} left alone: it starts {}", program.display());
                         return Ok(());
                     }
                     None => {
-                        println!("autostart is not registered");
+                        println!("{what} is not registered");
                         return Ok(());
                     }
                 }
             }
-            autostart::disable()?;
-            println!("autostart disabled");
+            if *app {
+                autostart::disable_app()?;
+            } else {
+                autostart::disable()?;
+            }
+            println!("{what} disabled");
         }
-        AutostartCmd::Status => match autostart::status()? {
-            AutostartState::Enabled { detail } => println!("enabled ({detail})"),
-            AutostartState::Disabled => println!("disabled"),
-        },
+        AutostartCmd::Status => {
+            let show = |label: &str, state: AutostartState| match state {
+                AutostartState::Enabled { detail } => println!("{label}: enabled ({detail})"),
+                AutostartState::Disabled => println!("{label}: disabled"),
+            };
+            show("engine", autostart::status()?);
+            if autostart::app_supported() {
+                show("app", autostart::app_status()?);
+            }
+        }
     }
     Ok(())
 }

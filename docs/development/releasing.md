@@ -35,8 +35,10 @@ and timestamps. Compare releases by the programs inside, not the MSI hash.
   `%LOCALAPPDATA%\Programs\MixerCraft` and a Start-menu entry.
 * Optional features (all on by default, chosen on the "Custom Setup" page,
   changeable later in Apps & features → Modify): desktop shortcut; start with
-  Windows (tray app via `HKCU\…\Run`, engine via the "MixerCraft Engine"
-  scheduled task); the install folder on the user `PATH`.
+  Windows (the "MixerCraft" scheduled task that opens the app in the tray, the
+  same switch as on the Settings tab; set on a new install only, so a later
+  choice on the Settings tab survives updates); the install folder on the
+  user `PATH`.
 * Checks for usbip-win2 (`%ProgramFiles%\USBip\usbip.exe`); if missing, the
   last page explains that virtual devices need it and where to get it
   (<https://github.com/vadimgrn/usbip-win2/releases>). Drivers are never
@@ -45,9 +47,9 @@ and timestamps. Compare releases by the programs inside, not the MSI hash.
   stops this installation's engine; an engine started from another folder,
   such as a development build, is left alone), removes the old version,
   installs the new one. The configuration in `%APPDATA%\MixerCraft` is kept.
-* Uninstall: closes the app, removes the autostart task if it starts this
-  installation's engine, removes the files, shortcuts, `Run` entry and `PATH`
-  entry. Configuration and logs stay (delete `%APPDATA%\MixerCraft` and
+* Uninstall: closes the app, removes the sign-in tasks ("MixerCraft",
+  "MixerCraft Engine") if they start this installation's programs, removes
+  the files, shortcuts and `PATH` entry. Configuration and logs stay (delete `%APPDATA%\MixerCraft` and
   `%LOCALAPPDATA%\MixerCraft` to remove them).
 
 Unattended: `msiexec /i MixerCraft-0.2.0-x64.msi /passive` (all default

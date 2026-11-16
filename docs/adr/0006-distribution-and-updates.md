@@ -27,17 +27,18 @@ source".)
     with WiX Toolset **5.0.2** (MS-RL, pinned as a local dotnet tool; WiX 6+
     ships under the Open Source Maintenance Fee EULA, which we avoid). The
     package contains the GUI, the engine and the CLI, a Start-menu shortcut
-    and optional features: desktop shortcut, start with Windows (tray app via
-    the `Run` key, engine via the Task Scheduler task of `mixercraft autostart
-    enable`), CLI on the user `PATH`. It **does not bundle or install
+    and optional features: desktop shortcut, start with Windows (the
+    "MixerCraft" Task Scheduler task that also backs the Settings tab: the
+    app opens in the tray and starts the engine; set on install, left alone
+    on upgrades), CLI on the user `PATH`. It **does not bundle or install
     drivers**: virtual devices need usbip-win2 (ADR 0007), which the user
     installs; the installer detects it and explains where to get it. No
     engine service yet (the engine runs per user; service mode is roadmap
     item 6). Upgrades remove the old version first (`MajorUpgrade` after
     `InstallInitialize`), after `mixercraft close-app` has closed the app and
     stopped this installation's engine; `%APPDATA%\MixerCraft` (configuration)
-    is never touched. Uninstall removes the autostart task only if it starts
-    this installation's engine.
+    is never touched. Uninstall removes the sign-in tasks only if they start
+    this installation's programs.
   * Signing: binaries and MSI are **unsigned** for now. A free Authenticode
     route is SignPath Foundation for open-source projects, which needs a
     public repository — possible now that the repository is public; to be

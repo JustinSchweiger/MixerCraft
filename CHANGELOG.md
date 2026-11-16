@@ -7,13 +7,30 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Settings tab in the desktop app:
+  - Startup (Windows): open MixerCraft hidden in the tray when you sign in
+    (a second Task Scheduler task, "MixerCraft", running the app with
+    `--tray`; the app starts the engine), or start only the engine at
+    sign-in (the existing "MixerCraft Engine" task). Shows the current state.
+  - Window: the close button hides to the tray or quits the app (audio keeps
+    running either way); peak-hold markers on the meters on or off. Stored in
+    `gui.toml` next to the engine configuration.
+  - Audio engine: sample rate (44.1 or 48 kHz), latency profile and the clock
+    (master) bus. They are saved to the configuration at once and apply when
+    the engine restarts; the tab says when a restart is needed and has a
+    Restart engine button (stops the engine, waits for it to exit, starts it
+    with the same configuration file). Shows the configuration file.
+  - Virtual devices: whether they are available, with a link to usbip-win2
+    when it is missing.
+- IPC (protocol v1, additive): `set_engine_settings` request; status reports
+  the configured `settings`, `restart_required` and `config_path`.
 - Windows installer: per-user MSI (no administrator rights) built with
   `scripts/build-installer.ps1` (WiX Toolset 5, free). Start-menu entry;
-  optional desktop shortcut, start with Windows (tray app and engine
-  autostart task) and `mixercraft` on the user PATH. Explains when usbip-win2
+  optional desktop shortcut, start with Windows (the Settings tab's sign-in
+  task) and `mixercraft` on the user PATH. Explains when usbip-win2
   (virtual devices) is missing, without installing drivers. Upgrades close the
   app and this installation's engine first and keep the configuration;
-  uninstall removes the autostart task. See `docs/development/releasing.md`.
+  uninstall removes this installation's sign-in tasks. See `docs/development/releasing.md`.
 - In-app updates: the app checks a release feed 20 s after start and daily
   (can be turned off on the About tab), shows "Update available" in the title
   bar, and on "Download and install" downloads the MSI, verifies its size and
@@ -23,8 +40,9 @@ All notable changes to this project are documented here. The format follows
   public repository (ADR 0006); the feed URL can be changed in
   `updates.toml`.
 - `mixercraft close-app` closes the app and stops the engine of this
-  installation (used by the installer); `mixercraft autostart disable
-  --if-under <folder>`.
+  installation (used by the installer); `mixercraft autostart enable --app`
+  and `disable [--app] [--if-under <folder>]`; `autostart status` shows the
+  engine and the app.
 
 ### Changed
 - Minimum supported Rust version is now 1.95 (required by Slint).
@@ -33,6 +51,16 @@ All notable changes to this project are documented here. The format follows
   automatically.
 
 ### Fixed
+- Windows default devices that the user gave to MixerCraft virtual devices
+  (e.g. "Desktop Input" as default output) come back after an engine
+  restart: the engine remembers them in `virtual-defaults.txt` next to the
+  configuration and restores each once its device reappears; choosing
+  another device while the virtual one is present forgets it. The guard
+  against Windows' own switch to a brand-new device now lasts 6 s (was 15 s),
+  so a deliberate choice right after a device appears is no longer undone.
+- The desktop app no longer claims "noise suppression needs 48 kHz" when the
+  running engine is simply older than the app (an engine started before an
+  update keeps running); it says the engine needs a restart instead.
 - Crackling and short hangs during CPU spikes: audio threads now run in the
   operating system's real-time audio class (MMCSS "Audio" on Windows): cpal's
   device callbacks (`realtime` feature), the software clock and the virtual
@@ -60,6 +88,15 @@ All notable changes to this project are documented here. The format follows
   longer causes a seconds-long pitch correction.
 
 ### Added
+- The MixerCraft icon on the Windows executables (`mixercraft-gui.exe`,
+  `mixercraftd.exe`, `mixercraft.exe`) for Explorer, the taskbar, Alt-Tab
+  and Task Manager, plus version information (product "MixerCraft",
+  version from Cargo; Task Manager lists "MixerCraft", "MixerCraft engine"
+  and "MixerCraft command-line client"). Building on Windows now needs
+  `rc.exe` from the Windows SDK (installed with the MSVC build tools).
+  `assets/` also holds a Linux `.desktop` file with hicolor PNG icons and a
+  macOS `.icns` for future packages; `assets/generate-icons.py` regenerates
+  all of them from the app icon.
 - Noise suppression per input strip (RNNoise, "Denoise" in the app,
   `mixercraft fx <strip> --denoise on`): removes steady background noise and
   much of the noise between words while leaving speech untouched. Needs the

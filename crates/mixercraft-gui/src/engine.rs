@@ -19,6 +19,8 @@ const STATUS_INTERVAL: Duration = Duration::from_millis(500);
 const RECONNECT_INTERVAL: Duration = Duration::from_millis(1000);
 /// How often the device list is refreshed (plugging in a headset).
 const DEVICES_INTERVAL: Duration = Duration::from_secs(5);
+/// Longest wait for a stopping engine to exit before a restart.
+const RESTART_WAIT: Duration = Duration::from_secs(10);
 
 /// A user action to forward to the engine.
 #[derive(Debug, Clone, PartialEq)]
@@ -28,7 +30,11 @@ pub enum Cmd {
     StripMute(u16, bool),
     BusMute(u16, bool),
     StripSolo(u16, bool),
-    Route { strip: u16, bus: u16, on: bool },
+    Route {
+        strip: u16,
+        bus: u16,
+        on: bool,
+    },
     StripFx(u16, mixercraft_ipc::StripFx),
     BusKeepAwake(u16, mixercraft_ipc::KeepAwake),
     StripSource(u16, DeviceChoice),
@@ -39,8 +45,12 @@ pub enum Cmd {
     RemoveBus(u16),
     RenameStrip(u16, String),
     RenameBus(u16, String),
+    /// Stores engine-wide settings (they apply at the next engine start).
+    EngineSettings(mixercraft_ipc::EngineSettings),
     StartEngine,
     StopEngine,
+    /// Stops the engine, waits until it has exited and starts it again.
+    RestartEngine,
 }
 
 /// Something the UI should show.
@@ -95,19 +105,24 @@ fn request_for(cmd: &Cmd) -> Option<Request> {
         Cmd::RemoveBus(bus) => Request::RemoveBus { bus },
         Cmd::RenameStrip(strip, ref name) => Request::RenameStrip { strip, name: name.clone() },
         Cmd::RenameBus(bus, ref name) => Request::RenameBus { bus, name: name.clone() },
+        Cmd::EngineSettings(ref settings) => Request::SetEngineSettings { settings: settings.clone() },
         Cmd::StopEngine => Request::Shutdown,
-        Cmd::StartEngine => return None,
+        Cmd::StartEngine | Cmd::RestartEngine => return None,
     })
 }
 
-/// Starts `mixercraftd` from the directory of this executable.
-fn start_engine() -> Result<(), String> {
+/// Starts `mixercraftd` from the directory of this executable, with the
+/// configuration file the last engine used (if known).
+fn start_engine(config: Option<&str>) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let engine = exe.with_file_name(format!("mixercraftd{}", std::env::consts::EXE_SUFFIX));
     if !engine.exists() {
         return Err(format!("mixercraftd not found next to the app ({})", engine.display()));
     }
     let mut cmd = Command::new(&engine);
+    if let Some(config) = config {
+        cmd.arg("--config").arg(config);
+    }
     cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     #[cfg(windows)]
     {
@@ -130,6 +145,9 @@ pub fn run(rx: &Receiver<Cmd>, deliver: &dyn Fn(Update)) {
     let mut next_status = Instant::now();
     let mut next_devices = Instant::now();
     let mut tried_auto_start = false;
+    // The configuration file of the engine last connected to, so a restart
+    // keeps using it.
+    let mut config_path: Option<String> = None;
 
     loop {
         let Some(c) = client.as_mut() else {
@@ -147,7 +165,7 @@ pub fn run(rx: &Receiver<Cmd>, deliver: &dyn Fn(Update)) {
                 // restarted behind the user's back.
                 Err(_) if !tried_auto_start => {
                     tried_auto_start = true;
-                    hint = match start_engine() {
+                    hint = match start_engine(config_path.as_deref()) {
                         Ok(()) => "Starting the engine…".into(),
                         Err(e) => e,
                     };
@@ -163,8 +181,8 @@ pub fn run(rx: &Receiver<Cmd>, deliver: &dyn Fn(Update)) {
                 Err(_) => {}
             }
             match rx.recv_timeout(RECONNECT_INTERVAL) {
-                Ok(Cmd::StartEngine) => {
-                    hint = match start_engine() {
+                Ok(Cmd::StartEngine | Cmd::RestartEngine) => {
+                    hint = match start_engine(config_path.as_deref()) {
                         Ok(()) => "Starting the engine…".into(),
                         Err(e) => e,
                     };
@@ -191,7 +209,12 @@ pub fn run(rx: &Receiver<Cmd>, deliver: &dyn Fn(Update)) {
         }
 
         let mut failed = false;
+        let mut restart = false;
         for cmd in coalesce(pending) {
+            if cmd == Cmd::RestartEngine {
+                restart = true;
+                continue;
+            }
             let Some(req) = request_for(&cmd) else { continue };
             let reshapes = matches!(cmd, Cmd::AddStrip | Cmd::AddBus | Cmd::RemoveStrip(_) | Cmd::RemoveBus(_));
             match c.request(&req) {
@@ -206,6 +229,26 @@ pub fn run(rx: &Receiver<Cmd>, deliver: &dyn Fn(Update)) {
                     break;
                 }
             }
+        }
+
+        if restart && !failed {
+            let _ = c.request(&Request::Shutdown);
+            client = None;
+            deliver(Update::Disconnected { hint: "Restarting the engine…".into() });
+            // The endpoint stays reachable until the old process has exited
+            // (and released its devices); only then start the new one.
+            let deadline = Instant::now() + RESTART_WAIT;
+            while Instant::now() < deadline && Client::connect("mixercraft-gui").is_ok() {
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            hint = match start_engine(config_path.as_deref()) {
+                Ok(()) => "Starting the engine…".into(),
+                Err(e) => e,
+            };
+            deliver(Update::Disconnected { hint: hint.clone() });
+            announced_disconnect = true;
+            std::thread::sleep(Duration::from_millis(300));
+            continue;
         }
 
         let now = Instant::now();
@@ -225,7 +268,12 @@ pub fn run(rx: &Receiver<Cmd>, deliver: &dyn Fn(Update)) {
         }
         if !failed && now >= next_status {
             match c.request(&Request::Status) {
-                Ok(Response::Status(s)) => deliver(Update::Status(s)),
+                Ok(Response::Status(s)) => {
+                    if !s.config_path.is_empty() {
+                        config_path = Some(s.config_path.clone());
+                    }
+                    deliver(Update::Status(s));
+                }
                 Ok(_) | Err(IpcError::Remote { .. }) => {}
                 Err(_) => failed = true,
             }
