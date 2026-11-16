@@ -22,7 +22,7 @@ and runs the hardware-independent tests on all three platforms.
 | Automatic device recovery | ✅ reopen with backoff, stall watchdog | ✅ | ✅ |
 | Engine independent of GUI (IPC) | ✅ | ✅ | ✅ |
 | Low-latency shared mode (IAudioClient3 / MMCSS) | 🗓 native WASAPI backend | n/a | n/a |
-| Virtual endpoints | 🧪 USB/IP spike works (emulated USB audio device via usbip-win2, ~65 ms app to app); not in the product yet | 🗓 PipeWire null-sink nodes | 🗓 AudioServerPlugIn |
+| Virtual endpoints | 🟡 emulated USB audio devices via usbip-win2 (user installs it); verified on hardware; ~95 ms app → MixerCraft → app; default devices restored | 🗓 PipeWire null-sink nodes | 🗓 AudioServerPlugIn |
 | Per-application capture | 🗓 WASAPI process loopback | 🗓 PipeWire stream links | 🗓 process taps (macOS 14.2+) |
 | Per-application output routing | 🗓 undocumented API, feature-flagged | 🗓 `target.object` metadata | 🗓 taps + mute original |
 | Autostart with the user session | 🟡 Task Scheduler logon task: registration, settings, start via Task Scheduler and removal verified; start at actual sign-in not yet verified | 🟡 systemd user unit; unit file unit-tested, not run on hardware | 🟡 LaunchAgent; plist unit-tested, not run on hardware |

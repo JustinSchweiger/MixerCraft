@@ -163,6 +163,10 @@ pub struct EngineStatus {
     pub buses: Vec<BusStatus>,
     pub recovery_events: Vec<RecoveryEvent>,
     pub last_error: Option<String>,
+    /// Virtual devices (`virtual:<name>` sources and sinks) can be created.
+    pub virtual_devices: bool,
+    /// Why virtual devices are unavailable (empty when they are).
+    pub virtual_devices_note: String,
 }
 
 /// State of one opened device stream.

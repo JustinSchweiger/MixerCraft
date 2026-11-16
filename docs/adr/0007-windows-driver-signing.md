@@ -1,7 +1,8 @@
 # 0007 — Windows virtual endpoints and driver signing
 
-**Status:** Proposed — owner preference: zero recurring cost. USB/IP route
-spiked successfully on 2026-11-16 (see results below).
+**Status:** Accepted (2026-11-16) — the USB/IP route is implemented
+(`mixercraft-usbip`, `mixercraft-winaudio`); the owner wants zero recurring
+cost. A native WaveRT driver stays an option if signing becomes available.
 
 ## Context
 Windows has no user-mode API that creates playback/recording endpoints
@@ -86,6 +87,27 @@ Assessment: the route is technically viable at zero cost for "virtual
 cable" use cases with ~65 ms latency. Next: integrate the emulator into
 `mixercraftd` (paced by the engine clock, one device per virtual strip/bus),
 handle the default-device takeover, then soak-test.
+
+## Integration results (2026-11-16)
+
+Implemented as `crates/mixercraft-usbip` (server, one speaker- or
+microphone-only device per virtual strip/bus) and
+`crates/mixercraft-winaudio` (restores the default devices). Verified on the
+same machine with a separate test engine:
+* Several virtual devices at once (three speakers and one microphone) were
+  created, used and removed; shutting the engine down removed all of them.
+* App → "MixerCraft Game" → strip → bus → "MixerCraft Chat" → app: 39–60 of
+  40–60 clicks per run arrived (the first click of a run is sent before
+  recording starts); round trip 90–108 ms with settled buffers, up to 134 ms
+  after buffers had grown.
+* Gaps: after making the idle-clock handover direction-aware, startup and
+  two 20 s runs had no gaps; in a third run two inputs (one of them idle)
+  underran at the same instant, which points at the master side (also seen
+  without virtual devices) but is not proven.
+* Default devices: Windows switched the default output to a never-seen
+  virtual device 1.2 s after connecting; MixerCraft restored it within 0.3 s.
+  Devices Windows had seen before did not take over the default.
+* Not yet tested: reboot/sleep, long soak, CPU use.
 
 ## Sources
 * Microsoft: https://learn.microsoft.com/en-us/windows-hardware/drivers/dashboard/code-signing-reqs

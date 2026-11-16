@@ -6,10 +6,9 @@
 //! * [`AudioSystem`] — device discovery and native capture/playback streams.
 //!
 //! Physical device I/O currently goes through [`cpal`], which wraps WASAPI
-//! (Windows), Core Audio (macOS) and ALSA or native PipeWire (Linux). Virtual
-//! endpoints and per-application capture need native integrations that cpal
-//! does not cover; they are added as separate platform modules (see
-//! `docs/architecture/virtual-devices.md`).
+//! (Windows), Core Audio (macOS) and ALSA or native PipeWire (Linux).
+//! Virtual devices (selector ids `virtual:<name>`) are emulated USB audio
+//! devices on Windows; see [`virtual_dev`].
 //!
 //! Streams are not `Send` on every backend. The engine therefore creates,
 //! owns and drops all streams on a single supervisor thread; only the data
@@ -17,6 +16,9 @@
 
 pub mod autostart;
 pub mod capabilities;
+pub mod virtual_dev;
+
+use std::sync::OnceLock;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, FromSample, Sample, SampleFormat, SizedSample, StreamConfig, SupportedBufferSize};
@@ -156,11 +158,20 @@ pub struct StreamInfo {
     pub sample_format: String,
 }
 
-/// A running stream. Dropping it stops the stream.
+/// A running stream. Dropping it stops the stream (a virtual device is
+/// unplugged).
 pub struct OpenStream {
-    stream: cpal::Stream,
+    stream: StreamInner,
     /// What was negotiated.
     pub info: StreamInfo,
+}
+
+enum StreamInner {
+    Cpal(cpal::Stream),
+    /// Held for its `Drop`, which unplugs the device.
+    Virtual {
+        _device: mixercraft_usbip::DeviceHandle,
+    },
 }
 
 impl std::fmt::Debug for OpenStream {
@@ -175,13 +186,18 @@ impl OpenStream {
     /// # Errors
     /// Backend failures.
     pub fn pause(&self) -> Result<(), PlatformError> {
-        self.stream.pause().map_err(backend("pause stream"))
+        match &self.stream {
+            StreamInner::Cpal(s) => s.pause().map_err(backend("pause stream")),
+            StreamInner::Virtual { .. } => Ok(()),
+        }
     }
 }
 
 /// Entry point for device discovery and stream creation.
 pub struct AudioSystem {
     host: cpal::Host,
+    /// Started on first use of a virtual device.
+    virtual_devices: OnceLock<Result<virtual_dev::Virtual, String>>,
 }
 
 impl std::fmt::Debug for AudioSystem {
@@ -196,9 +212,28 @@ impl AudioSystem {
     pub fn new() -> Self {
         #[cfg(all(target_os = "linux", feature = "pipewire"))]
         if let Ok(host) = cpal::host_from_id(cpal::HostId::PipeWire) {
-            return Self { host };
+            return Self { host, virtual_devices: OnceLock::new() };
         }
-        Self { host: cpal::default_host() }
+        Self { host: cpal::default_host(), virtual_devices: OnceLock::new() }
+    }
+
+    /// Whether virtual devices can be created; `Err` explains why not.
+    ///
+    /// # Errors
+    /// The reason virtual devices are unavailable.
+    pub fn virtual_devices_available(&self) -> Result<(), String> {
+        match self.virtual_devices.get() {
+            Some(Err(e)) => Err(e.clone()),
+            Some(Ok(_)) => Ok(()),
+            None => virtual_dev::unavailable_reason().map_or(Ok(()), |why| Err(why.into())),
+        }
+    }
+
+    fn virtual_system(&self, name: &str) -> Result<&virtual_dev::Virtual, PlatformError> {
+        self.virtual_devices
+            .get_or_init(virtual_dev::Virtual::start)
+            .as_ref()
+            .map_err(|why| virtual_dev::unavailable(name, why))
     }
 
     /// Name of the active backend (e.g. "WASAPI").
@@ -217,6 +252,11 @@ impl AudioSystem {
         let mut out = Vec::new();
         for d in self.host.devices().map_err(backend("enumerate devices"))? {
             let Ok(id) = d.id() else { continue };
+            // MixerCraft's own virtual endpoints: routing into them from here
+            // would loop MixerCraft into itself.
+            if virtual_dev::is_virtual_endpoint_name(&device_name(&d)) {
+                continue;
+            }
             let is_input = d.supports_input();
             let is_output = d.supports_output();
             let cfg = if is_output { d.default_output_config() } else { d.default_input_config() }.ok();
@@ -279,6 +319,10 @@ impl AudioSystem {
     /// # Errors
     /// Device lookup failures.
     pub fn probe_input(&self, sel: &DeviceSelector, req: StreamRequest) -> Result<StreamInfo, PlatformError> {
+        if let Some(name) = virtual_dev::virtual_name(sel) {
+            self.virtual_system(name)?;
+            return Ok(virtual_dev::Virtual::info(name));
+        }
         let (device, config, format) = self.prepare_input(sel, req)?;
         Ok(stream_info(&device, &config, format))
     }
@@ -300,6 +344,13 @@ impl AudioSystem {
         D: FnMut(&[f32]) + Send + 'static,
         E: FnMut(StreamFault) + Send + 'static,
     {
+        if let Some(name) = virtual_dev::virtual_name(sel) {
+            let handle = self.virtual_system(name)?.open_speaker(name, on_data, on_error);
+            return Ok(OpenStream {
+                stream: StreamInner::Virtual { _device: handle },
+                info: virtual_dev::Virtual::info(name),
+            });
+        }
         let (device, config, format) = self.prepare_input(sel, req)?;
         let info = stream_info(&device, &config, format);
         let mut on_error = on_error;
@@ -323,7 +374,7 @@ impl AudioSystem {
         }
         .map_err(backend("build input stream"))?;
         stream.play().map_err(backend("start input stream"))?;
-        Ok(OpenStream { stream, info })
+        Ok(OpenStream { stream: StreamInner::Cpal(stream), info })
     }
 
     fn prepare_output(
@@ -344,6 +395,10 @@ impl AudioSystem {
     /// # Errors
     /// Device lookup failures.
     pub fn probe_output(&self, sel: &DeviceSelector, req: StreamRequest) -> Result<StreamInfo, PlatformError> {
+        if let Some(name) = virtual_dev::virtual_name(sel) {
+            self.virtual_system(name)?;
+            return Ok(virtual_dev::Virtual::info(name));
+        }
         let (device, config, format) = self.prepare_output(sel, req)?;
         Ok(stream_info(&device, &config, format))
     }
@@ -365,6 +420,13 @@ impl AudioSystem {
         D: FnMut(&mut [f32]) + Send + 'static,
         E: FnMut(StreamFault) + Send + 'static,
     {
+        if let Some(name) = virtual_dev::virtual_name(sel) {
+            let handle = self.virtual_system(name)?.open_microphone(name, on_data, on_error);
+            return Ok(OpenStream {
+                stream: StreamInner::Virtual { _device: handle },
+                info: virtual_dev::Virtual::info(name),
+            });
+        }
         let (device, config, format) = self.prepare_output(sel, req)?;
         let info = stream_info(&device, &config, format);
         let mut on_error = on_error;
@@ -388,7 +450,7 @@ impl AudioSystem {
         }
         .map_err(backend("build output stream"))?;
         stream.play().map_err(backend("start output stream"))?;
-        Ok(OpenStream { stream, info })
+        Ok(OpenStream { stream: StreamInner::Cpal(stream), info })
     }
 }
 

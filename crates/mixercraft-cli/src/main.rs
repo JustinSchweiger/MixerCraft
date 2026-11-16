@@ -64,11 +64,13 @@ enum Cmd {
         #[arg(long, allow_negative_numbers = true)]
         high: Option<f32>,
     },
-    /// Choose the capture device of a strip: "none", "default", or a device
-    /// name or id (see `mixercraft devices`).
+    /// Choose the capture device of a strip: "none", "default", a device
+    /// name or id (see `mixercraft devices`), or `virtual:<name>` for a
+    /// virtual playback device that applications play into.
     Source { strip: u16, device: String },
-    /// Choose the playback device of a bus: "none", "default", or a device
-    /// name or id.
+    /// Choose the playback device of a bus: "none", "default", a device name
+    /// or id, or `virtual:<name>` for a virtual recording device that
+    /// applications record from.
     Sink { bus: u16, device: String },
     /// Add an input strip (no device, not routed).
     AddStrip {
@@ -347,13 +349,18 @@ fn strip_verbatim(p: &std::path::Path) -> String {
     s.strip_prefix(r"\\?\").filter(|rest| !rest.starts_with("UNC")).unwrap_or(&s).to_owned()
 }
 
-/// "none", "default", an id (contains ':' like `wasapi:{...}`) or a name.
+/// "none", "default", an id (contains ':' like `wasapi:{...}`), a virtual
+/// device (`virtual:<name>`) or a name.
 fn device_choice(arg: &str) -> mixercraft_ipc::DeviceChoice {
     use mixercraft_ipc::DeviceChoice;
     match arg {
         "none" => DeviceChoice::None,
         "default" => DeviceChoice::Default,
         id if id.contains(':') && id.contains('{') => DeviceChoice::Device { id: Some(id.into()), name: None },
+        // A MixerCraft virtual device, e.g. `virtual:Game`.
+        id if id.starts_with("virtual:") => {
+            DeviceChoice::Device { id: Some(id.into()), name: Some(format!("MixerCraft {}", &id["virtual:".len()..])) }
+        }
         name => DeviceChoice::Device { id: None, name: Some(name.into()) },
     }
 }

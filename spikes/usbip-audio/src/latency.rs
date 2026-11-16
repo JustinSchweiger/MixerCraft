@@ -29,6 +29,14 @@ pub fn list() {
     }
 }
 
+/// Prints the default output and input device names (unfiltered).
+pub fn defaults() {
+    let host = cpal::default_host();
+    let out = host.default_output_device().map_or_else(|| "-".to_owned(), |d| name(&d));
+    let inp = host.default_input_device().map_or_else(|| "-".to_owned(), |d| name(&d));
+    println!("default out: {out} | default in: {inp}");
+}
+
 fn find(host: &cpal::Host, part: &str, output: bool) -> cpal::Device {
     host.devices()
         .expect("enumerate devices")

@@ -16,20 +16,45 @@ domain, a drift-compensated FIFO, and the same recovery state machine. The
 capability model reports `VirtualEndpoints` per platform; the UI hides the
 feature where it is not available instead of showing inert controls.
 
-## Windows
+## Windows (implemented: emulated USB audio devices over USB/IP)
 
-* Kernel-mode WaveRT miniport derived from SysVAD (or ACX), in
-  `platform/windows/virtual-audio-driver/` (C/C++, WDK). The driver only
-  loops render DMA data to the paired capture endpoint; it contains no mixing
-  logic.
-* Endpoint count fixed per driver version (initially 2 cables + 1 "system"
-  cable), names configurable via registry (INF `AddReg`).
-* Installation: driver package installed by the MSI via `pnputil
-  /add-driver ... /install`; removal via `pnputil /delete-driver ...
-  /uninstall`. Upgrade replaces the package; the engine re-opens streams when
-  the endpoints reappear (normal recovery path).
-* Signing: attestation-signed via Partner Center (see ADR 0007). Test-signed
-  builds on dedicated development machines only.
+Chosen because it costs nothing and needs no kernel code of our own
+(ADR 0007).
+
+* `mixercraft-usbip` is a user-space USB/IP server (127.0.0.1:3240) that
+  emulates one full-speed USB Audio Class 1 device per virtual endpoint
+  (48 kHz, 16-bit stereo, 1 ms isochronous packets). A strip with source
+  `virtual:<name>` gets a *speaker* device "MixerCraft <name>" that
+  applications play into; a bus with sink `virtual:<name>` gets a
+  *microphone* device applications record from.
+* The Microsoft-signed usbip-win2 client driver, installed by the user,
+  attaches each device (`usbip attach -r 127.0.0.1 -b 1-N`, run by the
+  engine without a console window); Windows' inbox `usbaudio.sys` creates the
+  endpoint. Closing the stream unplugs the device.
+* The server is the devices' clock: host transfers complete in real time,
+  and an idle clock keeps audio moving at 48 kHz while Windows is not
+  streaming, so the engine never sees a stalled device. Handover is
+  direction-aware (speakers: never leave a hole; microphones: never read
+  twice) and immediate on an explicit stop (alternate setting 0).
+* The engine treats virtual devices like any other device: drift-compensated
+  FIFO, recovery state machine (a device Windows drops is reported as lost and
+  reopened). A virtual device never clocks the engine (its server threads are
+  not real-time threads); a virtual master bus uses the software clock.
+* Windows makes a newly connected USB audio device the default device. The
+  attach worker snapshots the defaults first and restores them for 15 s
+  afterwards (`mixercraft-winaudio`, the only crate with `unsafe` code: COM and
+  the undocumented `IPolicyConfig`). Measured: Windows switched the default
+  1.2 s after connecting and MixerCraft switched it back 0.3 s later (before
+  the restore check was tightened from 250 to 50 ms).
+* MixerCraft's own endpoints are hidden from the device list, so nothing can
+  be routed back into itself.
+* Limitations: about 95 ms from an application through MixerCraft to another
+  application (USB transfers are queued in 10 ms chunks on both sides); the
+  pid.codes *test* product id is used until the project has its own; the
+  usbip-win2 dependency (0.9.x) is a third-party kernel driver.
+
+A native WaveRT driver (lower latency) remains possible later if signing is
+arranged (OSSign or an EV certificate).
 
 ## Linux
 
@@ -55,4 +80,5 @@ feature where it is not available instead of showing inert controls.
 
 ## Status
 
-Planned for phase 5. Nothing in this document is implemented yet.
+Windows: implemented (emulated USB devices via usbip-win2), verified on
+hardware 2026-11-16. Linux and macOS: planned.

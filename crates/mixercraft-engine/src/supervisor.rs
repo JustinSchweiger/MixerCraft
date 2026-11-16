@@ -570,7 +570,10 @@ impl Supervisor {
             }
             Role::Master { bus } | Role::Output { bus } => {
                 let info = self.audio.probe_output(&selector, request).map_err(|e| e.to_string())?;
-                if matches!(role, Role::Master { .. }) && info.sample_rate == engine_rate {
+                // A virtual device never clocks the engine: its server
+                // threads are not real-time threads.
+                let is_virtual = mixercraft_platform::virtual_dev::virtual_name(&selector).is_some();
+                if matches!(role, Role::Master { .. }) && info.sample_rate == engine_rate && !is_virtual {
                     // Direct path: the device callback drives the engine.
                     self.soft_clock = None;
                     let core = Arc::clone(&self.core);
@@ -1208,6 +1211,8 @@ impl Supervisor {
                 .collect(),
             recovery_events: self.recovery_log.iter().cloned().collect(),
             last_error: self.last_error.clone(),
+            virtual_devices: self.audio.virtual_devices_available().is_ok(),
+            virtual_devices_note: self.audio.virtual_devices_available().err().unwrap_or_default(),
         }
     }
 }
