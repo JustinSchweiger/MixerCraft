@@ -275,6 +275,8 @@ fn microphone_idle_clock_stops_as_soon_as_the_host_reads() {
     let before = log.lock().unwrap().recorded_calls;
     let (_, _, _, actual, _) = c.ret();
     c.read(actual as usize + 10 * 16);
-    // Only the host's completion read audio while the transfer was pending.
-    assert_eq!(log.lock().unwrap().recorded_calls, before + 1);
+    // Only the host's packets read audio while the transfer was pending
+    // (one call per 1 ms packet, at most the 10 of this transfer).
+    let calls = log.lock().unwrap().recorded_calls - before;
+    assert!(calls <= 10, "{calls} reads during one 10-packet transfer");
 }

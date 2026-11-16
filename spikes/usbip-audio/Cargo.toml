@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-cpal = "0.18.2"
+cpal = { version = "0.18.2", features = ["realtime"] }
 
 [profile.release]
 debug = false

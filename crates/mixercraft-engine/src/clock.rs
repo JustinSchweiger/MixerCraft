@@ -58,6 +58,9 @@ impl SoftwareClock {
         let stop_flag = Arc::clone(&stop);
         let period = Duration::from_secs_f64(block_frames as f64 / f64::from(sample_rate.max(1)));
         let thread = std::thread::Builder::new().name("mixercraft-softclock".into()).spawn(move || {
+            // This thread drives the engine like a device callback would;
+            // give it the same real-time audio priority (MMCSS on Windows).
+            let _ = audio_thread_priority::promote_current_thread_to_real_time(block_frames as u32, sample_rate);
             let mut next = Instant::now() + period;
             while !stop_flag.load(Ordering::Relaxed) {
                 let now = Instant::now();
