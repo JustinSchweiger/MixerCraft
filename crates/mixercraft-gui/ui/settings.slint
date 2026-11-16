@@ -36,6 +36,9 @@ export struct SettingsState {
     master-options: [string],
     master-text: string,
     restart-required: bool,
+    // The connected engine predates settings over IPC (an older version
+    // still running after an update).
+    engine-outdated: bool,
     config-path: string,
     virtual-available: bool,
     virtual-note: string,
@@ -236,7 +239,12 @@ export component SettingsView inherits ScrollView {
                         detail: "Start it to change its settings.";
                         PillButton { text: "Start engine"; active: true; clicked => { root.changed(SettingKind.start-engine, 0); } }
                     }
-                    if root.connected && root.state.restart-required: Rectangle {
+                    if root.connected && root.state.engine-outdated: Row {
+                        title: "The running engine is an older version";
+                        detail: "Restart it to change its settings here.";
+                        PillButton { text: "Restart engine"; active: true; clicked => { root.changed(SettingKind.restart-engine, 0); } }
+                    }
+                    if root.connected && !root.state.engine-outdated && root.state.restart-required: Rectangle {
                         border-radius: 8px;
                         background: Theme.yellow-bg;
                         border-width: 1px;
@@ -258,7 +266,7 @@ export component SettingsView inherits ScrollView {
                             }
                         }
                     }
-                    if root.connected: Row {
+                    if root.connected && !root.state.engine-outdated: Row {
                         title: "Sample rate";
                         detail: root.state.rate-detail;
                         Segmented {
@@ -268,8 +276,8 @@ export component SettingsView inherits ScrollView {
                             activated(i) => { root.changed(SettingKind.sample-rate, i); }
                         }
                     }
-                    if root.connected: Divider { }
-                    if root.connected: Row {
+                    if root.connected && !root.state.engine-outdated: Divider { }
+                    if root.connected && !root.state.engine-outdated: Row {
                         title: "Latency";
                         detail: root.state.latency-index == 0 ? "Small buffers (about 6 ms per device). May crackle on busy systems."
                             : root.state.latency-index == 2 ? "Large buffers (about 40 ms per device) for heavily loaded or unusual systems."
@@ -281,8 +289,8 @@ export component SettingsView inherits ScrollView {
                             activated(i) => { root.changed(SettingKind.latency, i); }
                         }
                     }
-                    if root.connected: Divider { }
-                    if root.connected: Row {
+                    if root.connected && !root.state.engine-outdated: Divider { }
+                    if root.connected && !root.state.engine-outdated: Row {
                         title: "Clock";
                         detail: "The bus whose output device paces the engine. Other devices follow it with drift correction.";
                         DeviceSelect {
@@ -293,8 +301,8 @@ export component SettingsView inherits ScrollView {
                             selected(i) => { root.changed(SettingKind.master-bus, i); }
                         }
                     }
-                    if root.connected && !root.state.restart-required: Divider { }
-                    if root.connected && !root.state.restart-required: Row {
+                    if root.connected && !root.state.engine-outdated && !root.state.restart-required: Divider { }
+                    if root.connected && !root.state.engine-outdated && !root.state.restart-required: Row {
                         title: "Restart engine";
                         detail: "Stops and starts the audio engine. Audio pauses for a moment.";
                         PillButton { text: "Restart"; clicked => { root.changed(SettingKind.restart-engine, 0); } }

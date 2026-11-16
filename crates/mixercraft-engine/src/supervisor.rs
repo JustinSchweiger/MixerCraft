@@ -253,6 +253,9 @@ impl Supervisor {
     pub fn new(config: Config, config_path: Option<PathBuf>, process_start: Instant) -> anyhow::Result<Self> {
         let audio = AudioSystem::new();
         info!(backend = %audio.backend_name(), "audio backend selected");
+        if let Some(path) = &config_path {
+            audio.set_virtual_memory_file(path.with_file_name("virtual-defaults.txt"));
+        }
         let master_bus = config.master_bus_index();
         let request = Self::request(&config, config.engine.sample_rate);
 
@@ -1294,8 +1297,8 @@ impl Supervisor {
             last_error: self.last_error.clone(),
             virtual_devices: self.audio.virtual_devices_available().is_ok(),
             virtual_devices_note: self.audio.virtual_devices_available().err().unwrap_or_default(),
-            noise_suppression_available: self.sample_rate == mixercraft_core::denoise::DENOISE_RATE,
-            settings: EngineSettings {
+            noise_suppression_available: Some(self.sample_rate == mixercraft_core::denoise::DENOISE_RATE),
+            settings: Some(EngineSettings {
                 sample_rate: self.config.engine.sample_rate,
                 latency_profile: match self.config.engine.latency_profile {
                     mixercraft_config::LatencyProfile::LowLatency => LatencyProfile::LowLatency,
@@ -1303,7 +1306,7 @@ impl Supervisor {
                     mixercraft_config::LatencyProfile::MaxStability => LatencyProfile::MaxStability,
                 },
                 master_bus: self.config.engine.master_bus.clone(),
-            },
+            }),
             restart_required: self.restart_required(),
             config_path: self.config_path.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
         }
@@ -1383,12 +1386,13 @@ mod tests {
         let mut s = deviceless();
         ok(s.handle_request(Request::AddBus { name: String::new() }));
         let st = s.status();
-        assert_eq!(st.settings.sample_rate, 48_000);
-        assert_eq!(st.settings.master_bus.as_deref(), Some("A1"));
+        let current = st.settings.clone().expect("engine reports its settings");
+        assert_eq!(current.sample_rate, 48_000);
+        assert_eq!(current.master_bus.as_deref(), Some("A1"));
         assert!(!st.restart_required);
 
         // The same settings again: nothing to restart.
-        ok(s.handle_request(Request::SetEngineSettings { settings: st.settings.clone() }));
+        ok(s.handle_request(Request::SetEngineSettings { settings: current }));
         assert!(!s.status().restart_required);
 
         let settings = EngineSettings {
@@ -1401,7 +1405,7 @@ mod tests {
         assert_eq!(s.config.engine.latency_profile, mixercraft_config::LatencyProfile::MaxStability);
         assert_eq!(s.config.master_bus_index(), Some(1));
         let st = s.status();
-        assert_eq!(st.settings, settings);
+        assert_eq!(st.settings, Some(settings));
         assert!(st.restart_required);
         // The running engine keeps its rate until it restarts.
         assert_eq!(st.sample_rate, 48_000);

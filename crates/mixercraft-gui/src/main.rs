@@ -62,6 +62,9 @@ struct EngineSettingsView {
 }
 
 thread_local! {
+    /// The connected engine predates this app (reports no noise-suppression
+    /// availability).
+    static ENGINE_OUTDATED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static LOCAL_EDITS: RefCell<HashMap<(bool, usize), Instant>> = RefCell::new(HashMap::new());
     /// What each entry of the input / output device pickers selects.
     static DEVICE_CHOICES: RefCell<(Vec<DeviceChoice>, Vec<DeviceChoice>)> = const { RefCell::new((Vec::new(), Vec::new())) };
@@ -285,8 +288,14 @@ fn apply_status(ui: &MainWindow, s: &EngineStatus) {
     ui.set_connected(true);
     apply_engine_settings(ui, s);
     apply_devices(ui, None, Some(s.virtual_devices));
-    if ui.get_denoise_available() != s.noise_suppression_available {
-        ui.set_denoise_available(s.noise_suppression_available);
+    let available = s.noise_suppression_available == Some(true);
+    if ui.get_denoise_available() != available {
+        ui.set_denoise_available(available);
+    }
+    // An engine started before an update keeps running the old version.
+    let outdated = s.noise_suppression_available.is_none();
+    if ENGINE_OUTDATED.with(|o| o.replace(outdated)) != outdated && outdated {
+        show_notice(ui, OUTDATED_ENGINE.into());
     }
     BUS_KEEP_AWAKE.with(|k| *k.borrow_mut() = s.buses.iter().map(|b| b.keep_awake).collect());
 
@@ -474,8 +483,8 @@ fn apply_engine_settings(ui: &MainWindow, s: &EngineStatus) {
         let mut v = v.borrow_mut();
         v.buses = s.buses.iter().map(|b| (b.id.clone(), b.name.clone(), b.master)).collect();
         let recent = v.edited.is_some_and(|t| t.elapsed() < SETTINGS_EDIT_GRACE);
-        if !recent {
-            v.settings = s.settings.clone();
+        if !recent && let Some(settings) = &s.settings {
+            v.settings = settings.clone();
         }
         recent
     });
@@ -484,11 +493,14 @@ fn apply_engine_settings(ui: &MainWindow, s: &EngineStatus) {
     }
     let mut st = ui.get_settings();
     let before = st.clone();
+    // An engine from before this app cannot report or change its settings.
+    st.engine_outdated = s.settings.is_none();
     ENGINE_SETTINGS.with(|v| engine_fields(&mut st, &v.borrow()));
+    let configured = s.settings.as_ref().map_or(s.sample_rate, |e| e.sample_rate);
     let mut detail = format!("Running at {}.", khz(s.sample_rate));
     if st.sample_rate_index < 0 {
-        detail.push_str(&format!(" The configuration file asks for {}.", khz(s.settings.sample_rate)));
-    } else if !s.restart_required && s.settings.sample_rate != s.sample_rate {
+        detail.push_str(&format!(" The configuration file asks for {}.", khz(configured)));
+    } else if !s.restart_required && configured != s.sample_rate {
         detail.push_str(" The clock device does not offer the chosen rate, so the engine uses the device's rate.");
     }
     detail.push_str(" Noise suppression needs 48 kHz.");
@@ -683,6 +695,10 @@ fn apply(ui: &MainWindow, update: Update) {
 }
 
 /// Shows a message from the engine for a few seconds.
+/// Shown when the engine still runs a version from before an update.
+const OUTDATED_ENGINE: &str =
+    "The running engine is an older version. Stop and start it (tray menu) to use the new features.";
+
 fn show_notice(ui: &MainWindow, text: String) {
     let text = SharedString::from(text);
     ui.set_notice(text.clone());
@@ -844,7 +860,12 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.on_strip_denoise(move |i| {
         let ui = w.unwrap();
         if !ui.get_denoise_available() {
-            show_notice(&ui, "Noise suppression needs the engine to run at 48 kHz.".into());
+            let why = if ENGINE_OUTDATED.with(std::cell::Cell::get) {
+                OUTDATED_ENGINE
+            } else {
+                "Noise suppression needs the engine to run at 48 kHz."
+            };
+            show_notice(&ui, why.into());
             return;
         }
         let mut knobs = None;
