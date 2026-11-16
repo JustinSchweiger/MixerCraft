@@ -19,6 +19,7 @@ mixercraft-config.workspace = true
 mixercraft-ipc.workspace = true
 mixercraft-platform.workspace = true
 anyhow.workspace = true
+audio_thread_priority.workspace = true
 clap.workspace = true
 ctrlc.workspace = true
 rtrb.workspace = true

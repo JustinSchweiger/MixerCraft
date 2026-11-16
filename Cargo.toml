@@ -33,7 +33,10 @@ mixercraft-winaudio = { path = "crates/mixercraft-winaudio" }
 anyhow = "1.0.100"
 ctrlc = "3.4"
 clap = { version = "4.5", features = ["derive", "env"] }
-cpal = "0.18.2"
+# `realtime`: WASAPI/ALSA callback threads join the OS real-time audio class
+# (MMCSS on Windows); without it a CPU spike delays the engine.
+cpal = { version = "0.18.2", features = ["realtime"] }
+audio_thread_priority = { version = "0.35", default-features = false }
 directories = "6.0.0"
 interprocess = "2.2"
 rtrb = "0.4.1"

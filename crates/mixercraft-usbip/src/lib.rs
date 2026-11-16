@@ -44,11 +44,11 @@ pub const DEFAULT_PORT: u16 = 3240;
 /// Length of the chunks the idle ticker delivers (small, so a handover
 /// from the host does not leave a long hole).
 const IDLE_CHUNK: Duration = Duration::from_millis(2);
-/// Speakers: while the host streams, the ticker takes over when no transfer
-/// completed for this long (transfers complete every 10 ms plus scheduling
-/// jitter), because a hole in played audio is an underrun downstream, while
-/// a short overlap is harmless.
-const IDLE_AFTER: Duration = Duration::from_millis(13);
+/// Speakers: while the host streams, audio moves every 1 ms (one packet);
+/// the ticker takes over when none moved for this long, because a hole in
+/// played audio is an underrun downstream, while a short overlap is
+/// harmless.
+const IDLE_AFTER: Duration = Duration::from_millis(4);
 /// Microphones are the other way round: reading twice (ticker and host)
 /// drains the source, a short pause is harmless. The ticker stops as soon as
 /// the host submits and only takes over after this long without transfers.
@@ -298,7 +298,16 @@ impl Drop for DeviceHandle {
 }
 
 /// Keeps every device's audio moving at [`RATE`] while the host does not.
+/// Moves the calling thread into the operating system's real-time audio
+/// class (MMCSS "Audio" on Windows). The virtual devices' timing depends on
+/// these threads; at normal priority a CPU spike made Windows' own audio
+/// glitch (measured). Failure leaves the thread at normal priority.
+pub(crate) fn promote_to_audio_priority() {
+    let _ = audio_thread_priority::promote_current_thread_to_real_time(FRAMES_PER_MS as u32 * 10, RATE);
+}
+
 fn idle_loop(inner: &Inner) {
+    promote_to_audio_priority();
     let chunk = IDLE_CHUNK.as_nanos() as u64;
     let speaker_after = IDLE_AFTER.as_nanos() as u64;
     let mic_after = MIC_IDLE_AFTER.as_nanos() as u64;
