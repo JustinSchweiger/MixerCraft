@@ -1,0 +1,15 @@
+[package]
+name = "gui-spike-slint"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+slint = "1.19.0"
+
+[profile.release]
+debug = false
+lto = "thin"
+codegen-units = 1
+
+[workspace]
