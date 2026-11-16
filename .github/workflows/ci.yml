@@ -1,9 +1,24 @@
 name: CI
 
+# Documentation-only changes skip CI: the repository is private, so Actions
+# minutes are limited (macOS runners count 10x, Windows 2x) and a full run
+# costs about 50 minutes. Run it manually (workflow_dispatch) if needed.
 on:
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE-*"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/pull_request_template.md"
   push:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE-*"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/pull_request_template.md"
   workflow_dispatch:
 
 # Least privilege: CI only reads the repository. No secrets are used here, so

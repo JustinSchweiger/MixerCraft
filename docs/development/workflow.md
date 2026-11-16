@@ -10,22 +10,32 @@
   nodes`), body explaining *why*.
 * Significant work is tracked in GitHub Issues and referenced from PRs.
 
-## Repository settings to apply on GitHub
+## Repository settings (applied 2026-11-16)
 
-These are settings, not files, so they must be applied by a repository admin
-(web UI or `gh api`):
+* **Merging:** squash or rebase only; merge commits disabled; head branches
+  deleted after merge.
+* **Releases:** release immutability enabled.
+* **Actions:** default workflow token is read-only; fork workflows do not run;
+  every action must be pinned to a full commit SHA.
+* **Environment `release`:** deployments only from `v*` tags. Signing keys
+  (Authenticode, Apple Developer ID, notarization, minisign update key) will
+  be stored only as secrets of this environment.
+* **Security:** dependency graph, Dependabot alerts and malware alerts on;
+  Dependabot version updates via `.github/dependabot.yml`; cargo-deny weekly.
 
-1. **Branch protection / ruleset for `main`:** require pull requests, require
-   status checks `rustfmt`, `Linux x86_64`, `Linux ARM64`, `Windows x86_64`,
-   `macOS ARM64`, `MSRV (1.88)`; require linear history; block force pushes
-   and deletion.
-2. **Actions → General:** workflow permissions "Read repository contents";
-   require approval for workflows from outside collaborators.
-3. **Environments:** create `release` with required reviewers. Signing keys
-   (Authenticode, Apple Developer ID, notarization credentials, minisign
-   update key) are stored only as secrets of this environment.
-4. **Security:** enable Dependabot alerts, secret scanning and push
-   protection.
+Not available on a free private repository (would need GitHub Pro/Team or a
+public repository): enforced branch protection, required reviewers on
+environments, secret scanning.
+
+## CI minutes (private repository)
+
+The repository is private on a free GitHub account: branch protection is
+not enforced and Actions minutes are limited (macOS runners count 10×,
+Windows 2×; a full CI run costs about 50 minutes). Therefore:
+
+* CI skips changes that only touch Markdown, `docs/`, license files or
+  issue/PR templates. Trigger it manually from the Actions tab if needed.
+* "Require green CI before merging" is a convention, not an enforced rule.
 
 ## Releases
 
