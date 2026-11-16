@@ -1,0 +1,82 @@
+import { Theme } from "theme.slint";
+import { ScrollView } from "std-widgets.slint";
+
+export struct DeviceRow {
+    name: string,
+    role: string,
+    state: string,
+    healthy: bool,
+    format: string,
+    buffer: string,
+    gaps: string,
+    drift: string,
+    error: string,
+}
+
+component Cell inherits Text {
+    font-size: 12px;
+    color: Theme.text-mid;
+    overflow: elide;
+    vertical-alignment: center;
+}
+
+export component DiagnosticsView inherits VerticalLayout {
+    in property <[DeviceRow]> devices;
+    in property <[string]> events;
+    in property <string> engine-line;
+    spacing: 10px;
+    Rectangle {
+        border-radius: 10px;
+        background: Theme.section;
+        border-width: 1px;
+        border-color: Theme.section-border;
+        VerticalLayout {
+            padding: 10px;
+            spacing: 6px;
+            Text { text: "Engine"; font-size: 11px; color: Theme.text-dim; }
+            Text { text: root.engine-line; font-size: 12px; color: Theme.text; wrap: word-wrap; }
+            Text { text: "Devices"; font-size: 11px; color: Theme.text-dim; }
+            HorizontalLayout {
+                spacing: 10px;
+                Cell { text: "Device"; color: Theme.text-dim; horizontal-stretch: 3; }
+                Cell { text: "Role"; color: Theme.text-dim; width: 64px; }
+                Cell { text: "State"; color: Theme.text-dim; width: 84px; }
+                Cell { text: "Format"; color: Theme.text-dim; width: 104px; }
+                Cell { text: "Buffer"; color: Theme.text-dim; width: 70px; }
+                Cell { text: "Gaps"; color: Theme.text-dim; width: 54px; }
+                Cell { text: "Drift"; color: Theme.text-dim; width: 92px; }
+            }
+            for d in root.devices: VerticalLayout {
+                HorizontalLayout {
+                    spacing: 10px;
+                    Cell { text: d.name; color: Theme.text; horizontal-stretch: 3; }
+                    Cell { text: d.role; width: 64px; }
+                    Cell { text: d.state; color: d.healthy ? Theme.green : Theme.yellow; width: 84px; }
+                    Cell { text: d.format; width: 104px; }
+                    Cell { text: d.buffer; width: 70px; }
+                    Cell { text: d.gaps; width: 54px; }
+                    Cell { text: d.drift; width: 92px; }
+                }
+                if d.error != "": Cell { text: "Last error: " + d.error; color: Theme.red; font-size: 11px; }
+            }
+        }
+    }
+    Rectangle {
+        vertical-stretch: 1;
+        border-radius: 10px;
+        background: Theme.section;
+        border-width: 1px;
+        border-color: Theme.section-border;
+        VerticalLayout {
+            padding: 10px;
+            spacing: 4px;
+            Text { text: "Recovery log (newest first)"; font-size: 11px; color: Theme.text-dim; }
+            ScrollView {
+                VerticalLayout {
+                    spacing: 2px;
+                    for e in root.events: Cell { text: e; }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,174 @@
+import { Theme } from "theme.slint";
+
+// Segmented LED meter. `level` and `peak` are 0..1 (bottom..top).
+export component LedMeter inherits Rectangle {
+    in property <float> level;
+    in property <float> peak;
+    property <int> segments: 24;
+    property <int> lit: floor(clamp(root.level, 0, 1) * root.segments);
+    property <int> peak-seg: min(root.segments - 1, floor(clamp(root.peak, 0, 1) * root.segments));
+    property <length> seg-h: (root.height - (root.segments - 1) * 1px) / root.segments;
+    width: 6px;
+    for i in root.segments: Rectangle {
+        x: 0;
+        width: root.width;
+        height: root.seg-h;
+        y: root.height - (i + 1) * (root.seg-h + 1px) + 1px;
+        border-radius: 1px;
+        background: (i < root.lit || (i == root.peak-seg && root.peak > 0.01))
+            ? (i >= root.segments * 0.86 ? Theme.red : i >= root.segments * 0.7 ? Theme.yellow : Theme.green)
+            : Theme.led-off;
+    }
+}
+
+// Pill fader with the value shown in a round knob. `pos` is 0..1.
+// Double-click resets to `default-pos`.
+export component Fader inherits FocusScope {
+    in property <float> pos;
+    // Unity gain on the fader law in src/fader_law.rs.
+    in property <float> default-pos: 0.8333;
+    in property <string> value-text;
+    in property <string> label;
+    in property <float> step: 1 / 72;
+    // Accessible value in dB (numeric, so screen readers get a range).
+    in property <float> value-db;
+    callback changed(float);
+    property <length> knob: 30px;
+    width: 30px;
+    min-height: 120px;
+    accessible-role: slider;
+    accessible-label: root.label;
+    accessible-value: round(root.value-db);
+    accessible-value-minimum: -60;
+    accessible-value-maximum: 12;
+    accessible-value-step: 1;
+    accessible-action-increment => { root.changed(clamp(root.pos + root.step, 0, 1)); }
+    accessible-action-decrement => { root.changed(clamp(root.pos - root.step, 0, 1)); }
+    key-pressed(e) => {
+        if (e.text == Key.UpArrow) { root.changed(clamp(root.pos + root.step, 0, 1)); return accept; }
+        if (e.text == Key.DownArrow) { root.changed(clamp(root.pos - root.step, 0, 1)); return accept; }
+        reject
+    }
+    function at(y: length) -> float {
+        clamp(1 - (y - root.knob / 2) / (root.height - root.knob), 0, 1)
+    }
+    Rectangle {
+        x: 9px;
+        width: 12px;
+        background: Theme.track;
+        border-width: 1px;
+        border-color: Theme.line;
+        border-radius: 6px;
+    }
+    Rectangle {
+        x: 10px;
+        width: 10px;
+        y: (root.height - root.knob) * (1 - root.pos) + root.knob / 2;
+        height: max(0px, root.height - self.y - 1px);
+        background: Theme.accent-fill;
+        border-radius: 5px;
+    }
+    Rectangle {
+        width: root.knob;
+        height: root.knob;
+        y: (root.height - root.knob) * (1 - root.pos);
+        border-radius: root.knob / 2;
+        background: Theme.knob;
+        border-width: 2px;
+        border-color: root.has-focus ? Theme.text : Theme.accent;
+        Text {
+            text: root.value-text;
+            font-size: 10px;
+            color: Theme.knob-text;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    TouchArea {
+        mouse-cursor: ns-resize;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                root.focus();
+                root.changed(root.at(self.mouse-y));
+            }
+        }
+        moved => {
+            if (self.pressed) { root.changed(root.at(self.mouse-y)); }
+        }
+        double-clicked => { root.changed(root.default-pos); }
+    }
+}
+
+// Rounded toggle button with an indicator light.
+export component IndicatorButton inherits Rectangle {
+    in property <string> text;
+    // Full name for screen readers, e.g. "Mic mute" (defaults to the text).
+    in property <string> a11y-label: root.text;
+    in property <bool> on;
+    in property <color> on-color: Theme.accent;
+    in property <color> on-bg: Theme.accent-bg;
+    callback clicked();
+    height: 22px;
+    min-width: 42px;
+    border-radius: 7px;
+    border-width: 1px;
+    border-color: root.on ? root.on-color : (touch.has-hover ? Theme.text-dim : Theme.button-border);
+    background: root.on ? root.on-bg : (touch.has-hover ? Theme.button-hover : Theme.button);
+    accessible-role: checkbox;
+    accessible-label: root.a11y-label;
+    accessible-checkable: true;
+    accessible-checked: root.on;
+    accessible-action-default => { root.clicked(); }
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 7px;
+        spacing: 5px;
+        alignment: center;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 6px;
+                height: 6px;
+                border-radius: 3px;
+                background: root.on ? root.on-color : Theme.indicator-off;
+            }
+        }
+        Text {
+            text: root.text;
+            font-size: 11px;
+            color: root.on ? Theme.text : Theme.text-mid;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// Pill-shaped tab / action button.
+export component PillButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    callback clicked();
+    height: 24px;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: root.active ? #3b4656 : (touch.has-hover ? Theme.text-dim : Theme.line);
+    background: root.active ? Theme.accent-bg : transparent;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        Text {
+            text: root.text;
+            font-size: 12px;
+            color: root.active ? Theme.text : Theme.text-mid;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}

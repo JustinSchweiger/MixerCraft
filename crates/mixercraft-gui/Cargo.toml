@@ -1,0 +1,24 @@
+[package]
+name = "mixercraft-gui"
+description = "MixerCraft desktop mixer (Slint). Talks to the engine over IPC."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "mixercraft-gui"
+path = "src/main.rs"
+
+[dependencies]
+mixercraft-ipc.workspace = true
+slint.workspace = true
+
+[build-dependencies]
+slint-build.workspace = true
+
+[lints]
+workspace = true

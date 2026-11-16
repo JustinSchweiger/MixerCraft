@@ -26,7 +26,7 @@ and runs the hardware-independent tests on all three platforms.
 | Engine without console window | ✅ release builds use the GUI subsystem (verified) | n/a (no console by design) | n/a (no console by design) |
 | Engine log files | ✅ daily rotation, 7 days (verified) | ✅ CI only | ✅ CI only |
 | Engine before login | 🗓 service; startup-sound routing to be verified | ⛔ PipeWire is per user session | ⛔ firmware chime not routable |
-| Desktop GUI | 🗓 phase 7 | 🗓 | 🗓 |
+| Desktop GUI (mixer, routing, mute/solo, meters, diagnostics) | 🟡 verified against the engine; tray, strip processing and settings pending | 🟡 builds in CI only | 🟡 builds in CI only |
 | Installers | 🗓 MSI | 🗓 .deb / .rpm / AppImage | 🗓 .pkg / .dmg |
 | In-app updates | 🗓 | 🗓 (notify-only for distro packages) | 🗓 |
 

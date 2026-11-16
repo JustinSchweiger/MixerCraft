@@ -2,7 +2,7 @@
 
 ## All platforms
 
-* Rust ≥ 1.88 (stable). `rustup` recommended.
+* Rust ≥ 1.95 (stable). `rustup` recommended.
 * `cargo build --workspace` builds everything; `cargo test --workspace` runs
   all tests that do not need audio hardware.
 

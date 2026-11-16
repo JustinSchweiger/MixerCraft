@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Minimum supported Rust version is now 1.95 (required by Slint).
+
 ### Fixed
 - FIFO latency now recovers after stalls instead of staying raised forever;
   latency raises and recoveries appear in the engine's recovery log.
@@ -14,6 +17,11 @@ All notable changes to this project are documented here. The format follows
   longer causes a seconds-long pitch correction.
 
 ### Added
+- Desktop mixer window `mixercraft-gui` (Slint): input strips and output
+  buses with pill faders, LED meters with peak hold, routing, mute and solo
+  buttons; diagnostics tab; starts the engine when it isn't running;
+  reconnects automatically.
+- Repeated identical recovery events are merged into one entry with a count.
 - `mixercraft autostart enable|disable|status`: Task Scheduler logon task
   (Windows), systemd user unit (Linux), LaunchAgent (macOS).
 - Engine logs to a daily rotating file (7 days) in the per-user data

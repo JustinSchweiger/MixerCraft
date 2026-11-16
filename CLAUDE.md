@@ -17,6 +17,8 @@ distribution, updates 9. Extensibility.
 * `crates/mixercraft-platform` — capability model + cpal device I/O.
 * `crates/mixercraft-engine` — `mixercraftd`: supervisor, recovery, clocks.
 * `crates/mixercraft-cli` — `mixercraft` client.
+* `crates/mixercraft-gui` — desktop mixer (Slint, software renderer). UI in
+  `ui/*.slint` (colours in `ui/theme.slint`), IPC thread in `src/engine.rs`.
 * `docs/` — research, architecture, ADRs, feature matrix, roadmap.
 
 ## Commands

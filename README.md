@@ -5,9 +5,10 @@ alternative to VB-Audio Voicemeeter for Windows 11, Linux (PipeWire) and
 macOS.
 
 > **Status: early development (v0.1, pre-release).** The audio engine,
-> routing, drift-compensated multi-device I/O, recovery, configuration and
-> IPC work and have been exercised on Windows hardware. There is no GUI,
-> no virtual devices and no installer yet. See the
+> routing, drift-compensated multi-device I/O, recovery, configuration, IPC,
+> autostart and a first desktop mixer window work and have been exercised on
+> Windows hardware. There are no virtual devices, no strip processing
+> (EQ/compressor/gate) and no installer yet. See the
 > [roadmap](docs/roadmap.md) and the [feature matrix](docs/feature-matrix.md)
 > for exactly what works where.
 
@@ -25,7 +26,7 @@ macOS.
 
 ## Try it (developers)
 
-Requirements: Rust ≥ 1.88. On Linux also `libasound2-dev` (and optionally
+Requirements: Rust ≥ 1.95. On Linux also `libasound2-dev` (and optionally
 `libpipewire-0.3-dev libclang-dev` for the native PipeWire host).
 
 ```bash
@@ -49,7 +50,14 @@ microphone routed to speakers feeds back:
 ./target/release/mixercraftd
 ```
 
-Control it from another terminal:
+Open the mixer window (it connects to the running engine, or offers to start
+it):
+
+```bash
+./target/release/mixercraft-gui
+```
+
+Or control the engine from a terminal:
 
 ```bash
 ./target/release/mixercraft status

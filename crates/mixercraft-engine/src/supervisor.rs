@@ -57,6 +57,8 @@ const TICK: Duration = Duration::from_millis(20);
 const SAVE_DEBOUNCE: Duration = Duration::from_secs(2);
 /// Recovery log length.
 const RECOVERY_LOG_LEN: usize = 100;
+/// Identical events closer together than this are merged into one entry.
+const EVENT_MERGE_SECS: f64 = 10.0;
 
 /// An IPC request forwarded to the supervisor with a reply channel.
 #[derive(Debug)]
@@ -649,14 +651,28 @@ impl Supervisor {
     }
 
     fn log_event(&mut self, device: &str, event: &str, detail: &str) {
+        let now = self.started.elapsed().as_secs_f64();
+        // Merge bursts of identical events (e.g. backend xruns while the
+        // system is overloaded) so they cannot flush the log.
+        if let Some(last) = self.recovery_log.back_mut()
+            && last.device == device
+            && last.event == event
+            && last.detail == detail
+            && now - last.at_secs < EVENT_MERGE_SECS
+        {
+            last.count = last.count.max(1) + 1;
+            last.at_secs = now;
+            return;
+        }
         if self.recovery_log.len() == RECOVERY_LOG_LEN {
             self.recovery_log.pop_front();
         }
         self.recovery_log.push_back(RecoveryEvent {
-            at_secs: self.started.elapsed().as_secs_f64(),
+            at_secs: now,
             device: device.into(),
             event: event.into(),
             detail: detail.into(),
+            count: 1,
         });
     }
 

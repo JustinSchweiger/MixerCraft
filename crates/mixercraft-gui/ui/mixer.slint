@@ -1,0 +1,187 @@
+import { Theme } from "theme.slint";
+import { LedMeter, Fader, IndicatorButton } from "controls.slint";
+
+export struct StripView {
+    name: string,
+    source: string,
+    pos: float,
+    db: float,
+    db-text: string,
+    mute: bool,
+    solo: bool,
+    routes: [bool],
+}
+
+export struct MeterView {
+    l: float,
+    r: float,
+    lp: float,
+    rp: float,
+}
+
+component StripFrame inherits Rectangle {
+    in property <string> name;
+    in property <string> source;
+    border-radius: Theme.radius;
+    background: Theme.strip;
+    border-width: 1px;
+    border-color: Theme.strip-border;
+    VerticalLayout {
+        padding: 8px;
+        spacing: 8px;
+        VerticalLayout {
+            spacing: 1px;
+            Text { text: root.name; font-size: 13px; color: Theme.text; horizontal-alignment: center; overflow: elide; }
+            Text { text: root.source; font-size: 11px; color: Theme.text-dim; horizontal-alignment: center; overflow: elide; }
+        }
+        @children
+    }
+}
+
+export component InputStrip inherits StripFrame {
+    in property <StripView> data;
+    in property <MeterView> meter;
+    in property <[string]> bus-ids;
+    callback gain(float);
+    callback mute();
+    callback solo();
+    callback route(int);
+    width: 122px;
+    name: root.data.name;
+    source: root.data.source;
+    HorizontalLayout {
+        spacing: 5px;
+        alignment: center;
+        vertical-stretch: 1;
+        LedMeter { level: root.meter.l; peak: root.meter.lp; }
+        LedMeter { level: root.meter.r; peak: root.meter.rp; }
+        Fader {
+            pos: root.data.pos;
+            value-text: root.data.db-text;
+            value-db: root.data.db;
+            label: root.data.name + " fader";
+            changed(p) => { root.gain(p); }
+        }
+        VerticalLayout {
+            spacing: 4px;
+            alignment: start;
+            for bus[j] in root.bus-ids: IndicatorButton {
+                text: bus;
+                a11y-label: root.data.name + " to " + bus;
+                on: root.data.routes[j];
+                clicked => { root.route(j); }
+            }
+        }
+    }
+    HorizontalLayout {
+        spacing: 4px;
+        alignment: center;
+        IndicatorButton {
+            text: "Solo";
+            a11y-label: root.data.name + " solo";
+            on: root.data.solo;
+            on-color: Theme.yellow;
+            on-bg: Theme.yellow-bg;
+            clicked => { root.solo(); }
+        }
+        IndicatorButton {
+            text: "Mute";
+            a11y-label: root.data.name + " mute";
+            on: root.data.mute;
+            on-color: Theme.red;
+            on-bg: Theme.red-bg;
+            clicked => { root.mute(); }
+        }
+    }
+}
+
+export component BusStrip inherits StripFrame {
+    in property <StripView> data;
+    in property <MeterView> meter;
+    callback gain(float);
+    callback mute();
+    width: 86px;
+    name: root.data.name;
+    source: root.data.source;
+    HorizontalLayout {
+        spacing: 5px;
+        alignment: center;
+        vertical-stretch: 1;
+        LedMeter { level: root.meter.l; peak: root.meter.lp; }
+        LedMeter { level: root.meter.r; peak: root.meter.rp; }
+        Fader {
+            pos: root.data.pos;
+            value-text: root.data.db-text;
+            value-db: root.data.db;
+            label: root.data.name + " fader";
+            changed(p) => { root.gain(p); }
+        }
+    }
+    HorizontalLayout {
+        alignment: center;
+        IndicatorButton {
+            text: "Mute";
+            a11y-label: root.data.name + " mute";
+            on: root.data.mute;
+            on-color: Theme.red;
+            on-bg: Theme.red-bg;
+            clicked => { root.mute(); }
+        }
+    }
+}
+
+component Section inherits Rectangle {
+    in property <string> title;
+    border-radius: 10px;
+    background: Theme.section;
+    border-width: 1px;
+    border-color: Theme.section-border;
+    VerticalLayout {
+        padding: 8px;
+        spacing: 6px;
+        Text { text: root.title; font-size: 11px; color: Theme.text-dim; }
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            vertical-stretch: 1;
+            @children
+        }
+    }
+}
+
+export component MixerView inherits HorizontalLayout {
+    in property <[StripView]> strips;
+    in property <[MeterView]> strip-meters;
+    in property <[StripView]> buses;
+    in property <[MeterView]> bus-meters;
+    in property <[string]> bus-ids;
+    callback strip-gain(int, float);
+    callback strip-mute(int);
+    callback strip-solo(int);
+    callback strip-route(int, int);
+    callback bus-gain(int, float);
+    callback bus-mute(int);
+    spacing: 8px;
+    alignment: start;
+    Section {
+        title: "Inputs";
+        for s[i] in root.strips: InputStrip {
+            data: s;
+            meter: root.strip-meters[i];
+            bus-ids: root.bus-ids;
+            gain(p) => { root.strip-gain(i, p); }
+            mute => { root.strip-mute(i); }
+            solo => { root.strip-solo(i); }
+            route(b) => { root.strip-route(i, b); }
+        }
+    }
+    Section {
+        title: "Outputs";
+        for b[i] in root.buses: BusStrip {
+            data: b;
+            meter: root.bus-meters[i];
+            gain(p) => { root.bus-gain(i, p); }
+            mute => { root.bus-mute(i); }
+        }
+    }
+}
