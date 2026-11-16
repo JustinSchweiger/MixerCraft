@@ -5,6 +5,8 @@ members = [
     "crates/mixercraft-config",
     "crates/mixercraft-ipc",
     "crates/mixercraft-platform",
+    "crates/mixercraft-engine",
+    "crates/mixercraft-cli",
 ]
 
 [workspace.package]

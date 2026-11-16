@@ -1,0 +1,29 @@
+[package]
+name = "mixercraft-engine"
+description = "The MixerCraft background audio engine (mixercraftd)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "mixercraftd"
+path = "src/main.rs"
+
+[dependencies]
+mixercraft-core.workspace = true
+mixercraft-config.workspace = true
+mixercraft-ipc.workspace = true
+mixercraft-platform.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+ctrlc.workspace = true
+rtrb.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
