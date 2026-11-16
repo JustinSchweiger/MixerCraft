@@ -32,6 +32,7 @@ use std::time::{Duration, Instant};
 use mixercraft_config::{Config, Sink, Source};
 use mixercraft_core::engine::{Command, EngineHandle, engine};
 use mixercraft_core::fifo::{FifoSpec, fifo};
+use mixercraft_core::fx::FxParams;
 use mixercraft_core::mixer::{BusSpec, Mixer, MixerCommand, MixerLayout, MixerMeters, StripSpec};
 use mixercraft_core::stats::FifoStats;
 use mixercraft_ipc::{
@@ -186,6 +187,7 @@ pub fn layout_from_config(config: &Config) -> MixerLayout {
                 mute: s.mute,
                 solo: s.solo,
                 routes: s.routes.iter().filter_map(|r| config.bus_index(r)).fold(0u64, |m, b| m | (1u64 << b)),
+                fx: fx_params(&s.fx),
             })
             .collect(),
         buses: config
@@ -193,6 +195,16 @@ pub fn layout_from_config(config: &Config) -> MixerLayout {
             .iter()
             .map(|b| BusSpec { channels: usize::from(b.channels), gain_db: b.gain_db, mute: b.mute })
             .collect(),
+    }
+}
+
+fn fx_params(fx: &mixercraft_config::FxConfig) -> FxParams {
+    FxParams {
+        gate_threshold_db: fx.gate_threshold_db,
+        comp_amount: fx.comp_amount,
+        eq_low_db: fx.eq_low_db,
+        eq_mid_db: fx.eq_mid_db,
+        eq_high_db: fx.eq_high_db,
     }
 }
 
@@ -761,6 +773,26 @@ impl Supervisor {
                 b.mute = mute;
                 MixerCommand::BusMute { bus, mute }
             }
+            Request::SetStripFx { strip, fx } => {
+                let Some(s) = self.config.strips.get_mut(usize::from(strip)) else { return invalid("no such strip") };
+                // Clamp to the valid ranges so the stored config stays valid.
+                let p = FxParams {
+                    gate_threshold_db: fx.gate_threshold_db,
+                    comp_amount: fx.comp_amount,
+                    eq_low_db: fx.eq_low_db,
+                    eq_mid_db: fx.eq_mid_db,
+                    eq_high_db: fx.eq_high_db,
+                }
+                .sanitized();
+                s.fx = mixercraft_config::FxConfig {
+                    gate_threshold_db: p.gate_threshold_db,
+                    comp_amount: p.comp_amount,
+                    eq_low_db: p.eq_low_db,
+                    eq_mid_db: p.eq_mid_db,
+                    eq_high_db: p.eq_high_db,
+                };
+                MixerCommand::StripFx { strip, params: p }
+            }
         };
         match self.handle.send(Command::Mixer(cmd)) {
             Ok(()) => {
@@ -866,6 +898,13 @@ impl Supervisor {
                     mute: s.mute,
                     solo: s.solo,
                     routes: s.routes.iter().filter_map(|r| self.config.bus_index(r)).map(|b| b as u16).collect(),
+                    fx: mixercraft_ipc::StripFx {
+                        gate_threshold_db: s.fx.gate_threshold_db,
+                        comp_amount: s.fx.comp_amount,
+                        eq_low_db: s.fx.eq_low_db,
+                        eq_mid_db: s.fx.eq_mid_db,
+                        eq_high_db: s.fx.eq_high_db,
+                    },
                 })
                 .collect(),
             buses: self

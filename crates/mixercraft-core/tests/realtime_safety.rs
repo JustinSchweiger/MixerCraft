@@ -6,6 +6,7 @@
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use mixercraft_core::engine::{Command, engine};
 use mixercraft_core::fifo::{FifoSpec, fifo};
+use mixercraft_core::fx::FxParams;
 use mixercraft_core::mixer::{BusSpec, Mixer, MixerCommand, MixerLayout, StripSpec};
 
 #[global_allocator]
@@ -14,7 +15,20 @@ static ALLOC: AllocDisabler = AllocDisabler;
 #[test]
 fn engine_cycle_with_fifos_and_commands_does_not_allocate() {
     let layout = MixerLayout {
-        strips: vec![StripSpec { routes: 0b11, ..StripSpec::stereo() }; 4],
+        strips: vec![
+            StripSpec {
+                routes: 0b11,
+                fx: FxParams {
+                    gate_threshold_db: -50.0,
+                    comp_amount: 6.0,
+                    eq_low_db: 3.0,
+                    eq_mid_db: -2.0,
+                    eq_high_db: 4.0
+                },
+                ..StripSpec::stereo()
+            };
+            4
+        ],
         buses: vec![BusSpec::stereo(); 2],
     };
     let mixer = Mixer::new(&layout, 1024, 48_000).unwrap();
@@ -44,6 +58,8 @@ fn engine_cycle_with_fifos_and_commands_does_not_allocate() {
             let db = -(((i / 50) % 24) as f32);
             handle.send(Command::Mixer(MixerCommand::StripGain { strip: 0, db })).unwrap();
             handle.send(Command::Mixer(MixerCommand::Route { strip: 2, bus: 0, enabled: i % 100 == 0 })).unwrap();
+            let params = FxParams { eq_mid_db: (i % 7) as f32, comp_amount: (i % 11) as f32, ..FxParams::default() };
+            handle.send(Command::Mixer(MixerCommand::StripFx { strip: 1, params })).unwrap();
         }
         assert_no_alloc(|| {
             in_w.write(&input);

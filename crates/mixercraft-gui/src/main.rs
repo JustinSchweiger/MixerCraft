@@ -12,6 +12,7 @@
 
 mod engine;
 mod fader_law;
+mod fx_law;
 mod meters;
 #[cfg(any(windows, target_os = "macos"))]
 mod tray;
@@ -93,16 +94,35 @@ fn vec_model<T: Clone + 'static>(m: &ModelRc<T>) -> Option<&VecModel<T>> {
 }
 
 fn strip_view(name: &str, source: &str, db: f32, mute: bool, solo: bool, routes: Vec<bool>) -> StripView {
-    StripView {
-        name: name.into(),
-        source: source.into(),
-        pos: fader_law::db_to_pos(db),
-        db,
-        db_text: fader_law::knob_text(db).into(),
-        mute,
-        solo,
-        routes: ModelRc::new(VecModel::from(routes)),
-    }
+    with_fx(
+        StripView {
+            name: name.into(),
+            source: source.into(),
+            pos: fader_law::db_to_pos(db),
+            db,
+            db_text: fader_law::knob_text(db).into(),
+            mute,
+            solo,
+            routes: ModelRc::new(VecModel::from(routes)),
+            ..StripView::default()
+        },
+        &mixercraft_ipc::StripFx::default(),
+    )
+}
+
+/// Sets the knob positions of a strip from engine settings.
+fn with_fx(mut row: StripView, fx: &mixercraft_ipc::StripFx) -> StripView {
+    let k = fx_law::Knobs::from_fx(fx);
+    row.gate = k.gate;
+    row.comp = k.comp;
+    row.low = k.low;
+    row.mid = k.mid;
+    row.high = k.high;
+    row
+}
+
+fn knobs_of(row: &StripView) -> fx_law::Knobs {
+    fx_law::Knobs { gate: row.gate, comp: row.comp, low: row.low, mid: row.mid, high: row.high }
 }
 
 /// Replaces rows that changed, or the whole model if the shape changed.
@@ -121,6 +141,11 @@ fn sync_rows(current: ModelRc<StripView>, fresh: Vec<StripView>, bus: bool) -> O
             row.mute = old.mute;
             row.solo = old.solo;
             row.routes = old.routes.clone();
+            row.gate = old.gate;
+            row.comp = old.comp;
+            row.low = old.low;
+            row.mid = old.mid;
+            row.high = old.high;
         }
         let same_routes = old.routes.iter().eq(row.routes.iter());
         let changed = old.name != row.name
@@ -129,6 +154,7 @@ fn sync_rows(current: ModelRc<StripView>, fresh: Vec<StripView>, bus: bool) -> O
             || old.db_text != row.db_text
             || old.mute != row.mute
             || old.solo != row.solo
+            || knobs_of(&old) != knobs_of(&row)
             || !same_routes;
         if changed {
             model.set_row_data(i, row);
@@ -151,7 +177,7 @@ fn apply_status(ui: &MainWindow, s: &EngineStatus) {
         .iter()
         .map(|st| {
             let routes = (0..s.buses.len()).map(|b| st.routes.contains(&(b as u16))).collect();
-            strip_view(&st.name, &st.source, st.gain_db, st.mute, st.solo, routes)
+            with_fx(strip_view(&st.name, &st.source, st.gain_db, st.mute, st.solo, routes), &st.fx)
         })
         .collect();
     let n_strips = strips.len();
@@ -376,6 +402,26 @@ fn main() -> Result<(), slint::PlatformError> {
         row.routes.set_row_data(b as usize, on);
         mark_edit(false, i as usize);
         let _ = t.send(Cmd::Route { strip: i as u16, bus: b as u16, on });
+    });
+    let w = ui.as_weak();
+    let t = tx.clone();
+    ui.on_strip_fx(move |i, kind, v| {
+        let mut knobs = None;
+        let edited = edit_row(&w.unwrap().get_strips(), i as usize, |r| {
+            let v = v.clamp(0.0, 1.0);
+            match kind {
+                0 => r.gate = v,
+                1 => r.comp = v,
+                2 => r.low = v,
+                3 => r.mid = v,
+                _ => r.high = v,
+            }
+            knobs = Some(knobs_of(r));
+        });
+        if let (Some(_), Some(k)) = (edited, knobs) {
+            mark_edit(false, i as usize);
+            let _ = t.send(Cmd::StripFx(i as u16, k.to_fx()));
+        }
     });
     let t = tx.clone();
     ui.on_start_engine(move || {

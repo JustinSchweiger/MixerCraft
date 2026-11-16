@@ -27,6 +27,7 @@ pub enum Cmd {
     BusMute(u16, bool),
     StripSolo(u16, bool),
     Route { strip: u16, bus: u16, on: bool },
+    StripFx(u16, mixercraft_ipc::StripFx),
     StartEngine,
     StopEngine,
 }
@@ -52,6 +53,8 @@ pub fn coalesce(cmds: Vec<Cmd>) -> Vec<Cmd> {
         .filter(|c| match c {
             Cmd::StripGain(i, _) => seen.insert((false, *i)),
             Cmd::BusGain(i, _) => seen.insert((true, *i)),
+            // Knob drags send the whole processing state; the last one wins.
+            Cmd::StripFx(i, _) => seen.insert((false, 1000 + *i)),
             _ => true,
         })
         .collect();
@@ -67,6 +70,7 @@ fn request_for(cmd: &Cmd) -> Option<Request> {
         Cmd::BusMute(bus, mute) => Request::SetBusMute { bus, mute },
         Cmd::StripSolo(strip, solo) => Request::SetStripSolo { strip, solo },
         Cmd::Route { strip, bus, on } => Request::SetRoute { strip, bus, enabled: on },
+        Cmd::StripFx(strip, fx) => Request::SetStripFx { strip, fx },
         Cmd::StopEngine => Request::Shutdown,
         Cmd::StartEngine => return None,
     })

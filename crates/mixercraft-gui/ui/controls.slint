@@ -172,3 +172,106 @@ export component PillButton inherits Rectangle {
         clicked => { root.clicked(); }
     }
 }
+
+// Rotary knob. `value` is 0..1; drag up/down (or arrow keys) to change it,
+// double-click to reset to `default-value`.
+export component Knob inherits FocusScope {
+    in property <float> value;
+    in property <float> default-value;
+    in property <string> label;
+    in property <string> value-text;
+    in property <bool> active;
+    in property <length> size: 30px;
+    // Screen readers get the value in real units.
+    in property <string> a11y-label;
+    in property <float> a11y-value;
+    in property <float> a11y-min;
+    in property <float> a11y-max;
+    callback changed(float);
+    property <float> step: 0.02;
+    property <length> drag-y;
+    property <float> drag-value;
+    property <angle> angle: -225deg + 270deg * clamp(root.value, 0, 1);
+    width: root.size + 12px;
+    vertical-stretch: 0;
+    accessible-role: slider;
+    accessible-label: root.a11y-label;
+    accessible-value: round(root.a11y-value * 10) / 10;
+    accessible-value-minimum: root.a11y-min;
+    accessible-value-maximum: root.a11y-max;
+    accessible-action-increment => { root.changed(clamp(root.value + root.step, 0, 1)); }
+    accessible-action-decrement => { root.changed(clamp(root.value - root.step, 0, 1)); }
+    key-pressed(e) => {
+        if (e.text == Key.UpArrow || e.text == Key.RightArrow) { root.changed(clamp(root.value + root.step, 0, 1)); return accept; }
+        if (e.text == Key.DownArrow || e.text == Key.LeftArrow) { root.changed(clamp(root.value - root.step, 0, 1)); return accept; }
+        reject
+    }
+    VerticalLayout {
+        spacing: 1px;
+        alignment: start;
+        Text { text: root.label; font-size: 10px; color: Theme.text-dim; horizontal-alignment: center; }
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: root.size;
+                height: root.size;
+                Rectangle {
+                    border-radius: self.width / 2;
+                    background: Theme.track;
+                    border-width: 1px;
+                    border-color: root.has-focus ? Theme.text-dim : Theme.line;
+                }
+                // Background track of the arc.
+                Path {
+                    width: root.size;
+                    height: root.size;
+                    viewbox-width: 34;
+                    viewbox-height: 34;
+                    stroke: Theme.led-off;
+                    stroke-width: 3px;
+                    commands: "M 7.81 26.19 A 13 13 0 1 1 26.19 26.19";
+                }
+                // Value arc.
+                if root.value > 0.005: Path {
+                    width: root.size;
+                    height: root.size;
+                    viewbox-width: 34;
+                    viewbox-height: 34;
+                    stroke: root.active ? Theme.accent : Theme.indicator-off;
+                    stroke-width: 3px;
+                    commands: "M 7.81 26.19 A 13 13 0 " + (root.value > 0.6667 ? "1" : "0") + " 1 "
+                        + (17 + 13 * cos(root.angle)) + " " + (17 + 13 * sin(root.angle));
+                }
+                // Pointer.
+                Path {
+                    width: root.size;
+                    height: root.size;
+                    viewbox-width: 34;
+                    viewbox-height: 34;
+                    stroke: Theme.knob;
+                    stroke-width: 2px;
+                    commands: "M " + (17 + 3 * cos(root.angle)) + " " + (17 + 3 * sin(root.angle)) + " L "
+                        + (17 + 9 * cos(root.angle)) + " " + (17 + 9 * sin(root.angle));
+                }
+            }
+        }
+        Text { text: root.value-text; font-size: 10px; color: root.active ? Theme.text-mid : Theme.text-dim; horizontal-alignment: center; }
+    }
+    TouchArea {
+        mouse-cursor: ns-resize;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                root.focus();
+                root.drag-y = self.mouse-y;
+                root.drag-value = root.value;
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                // 150 px of travel covers the whole range.
+                root.changed(clamp(root.drag-value + (root.drag-y - self.mouse-y) / 150px, 0, 1));
+            }
+        }
+        double-clicked => { root.changed(root.default-value); }
+    }
+}

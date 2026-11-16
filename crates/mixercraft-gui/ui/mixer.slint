@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { LedMeter, Fader, IndicatorButton } from "controls.slint";
+import { LedMeter, Fader, IndicatorButton, Knob } from "controls.slint";
 
 export struct StripView {
     name: string,
@@ -10,6 +10,12 @@ export struct StripView {
     mute: bool,
     solo: bool,
     routes: [bool],
+    // Processing knob positions, 0..1 (see src/fx_law.rs).
+    gate: float,
+    comp: float,
+    low: float,
+    mid: float,
+    high: float,
 }
 
 export struct MeterView {
@@ -46,9 +52,89 @@ export component InputStrip inherits StripFrame {
     callback mute();
     callback solo();
     callback route(int);
+    // kind: 0 gate, 1 compressor, 2 low, 3 mid, 4 high; value 0..1.
+    callback fx(int, float);
     width: 122px;
     name: root.data.name;
     source: root.data.source;
+    function eq-text(v: float) -> string {
+        abs(v * 24 - 12) < 0.25 ? "0 dB" : ((v * 24 - 12 > 0 ? "+" : "") + round((v * 24 - 12) * 2) / 2 + " dB")
+    }
+    HorizontalLayout {
+        alignment: center;
+        spacing: 2px;
+        vertical-stretch: 0;
+        Knob {
+            size: 34px;
+            label: "Gate";
+            value: root.data.gate;
+            default-value: 0;
+            active: root.data.gate > 0.005;
+            value-text: root.data.gate < 0.005 ? "off" : round(-80 + 70 * root.data.gate) + " dB";
+            a11y-label: root.data.name + " gate threshold";
+            a11y-value: -80 + 70 * root.data.gate;
+            a11y-min: -80;
+            a11y-max: -10;
+            changed(v) => { root.fx(0, v); }
+        }
+        Knob {
+            size: 34px;
+            label: "Comp";
+            value: root.data.comp;
+            default-value: 0;
+            active: root.data.comp > 0.005;
+            value-text: root.data.comp < 0.005 ? "off" : round(root.data.comp * 100) / 10;
+            a11y-label: root.data.name + " compressor amount";
+            a11y-value: root.data.comp * 10;
+            a11y-min: 0;
+            a11y-max: 10;
+            changed(v) => { root.fx(1, v); }
+        }
+    }
+    HorizontalLayout {
+        alignment: center;
+        spacing: 0px;
+        vertical-stretch: 0;
+        Knob {
+            size: 28px;
+            label: "Low";
+            value: root.data.low;
+            default-value: 0.5;
+            active: abs(root.data.low - 0.5) > 0.01;
+            value-text: root.eq-text(root.data.low);
+            a11y-label: root.data.name + " low EQ";
+            a11y-value: root.data.low * 24 - 12;
+            a11y-min: -12;
+            a11y-max: 12;
+            changed(v) => { root.fx(2, v); }
+        }
+        Knob {
+            size: 28px;
+            label: "Mid";
+            value: root.data.mid;
+            default-value: 0.5;
+            active: abs(root.data.mid - 0.5) > 0.01;
+            value-text: root.eq-text(root.data.mid);
+            a11y-label: root.data.name + " mid EQ";
+            a11y-value: root.data.mid * 24 - 12;
+            a11y-min: -12;
+            a11y-max: 12;
+            changed(v) => { root.fx(3, v); }
+        }
+        Knob {
+            size: 28px;
+            label: "High";
+            value: root.data.high;
+            default-value: 0.5;
+            active: abs(root.data.high - 0.5) > 0.01;
+            value-text: root.eq-text(root.data.high);
+            a11y-label: root.data.name + " high EQ";
+            a11y-value: root.data.high * 24 - 12;
+            a11y-min: -12;
+            a11y-max: 12;
+            changed(v) => { root.fx(4, v); }
+        }
+    }
     HorizontalLayout {
         spacing: 5px;
         alignment: center;
@@ -159,6 +245,7 @@ export component MixerView inherits HorizontalLayout {
     callback strip-mute(int);
     callback strip-solo(int);
     callback strip-route(int, int);
+    callback strip-fx(int, int, float);
     callback bus-gain(int, float);
     callback bus-mute(int);
     spacing: 8px;
@@ -173,6 +260,7 @@ export component MixerView inherits HorizontalLayout {
             mute => { root.strip-mute(i); }
             solo => { root.strip-solo(i); }
             route(b) => { root.strip-route(i, b); }
+            fx(kind, v) => { root.strip-fx(i, kind, v); }
         }
     }
     Section {

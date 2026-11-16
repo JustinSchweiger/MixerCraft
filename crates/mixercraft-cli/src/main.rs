@@ -44,6 +44,26 @@ enum Cmd {
     Solo { strip: u16, state: OnOff },
     /// Connect or disconnect a strip from a bus.
     Route { strip: u16, bus: u16, state: OnOff },
+    /// Set a strip's gate, compressor and EQ (unspecified values keep their
+    /// current setting).
+    Fx {
+        strip: u16,
+        /// Gate threshold in dBFS (-80 = off).
+        #[arg(long, allow_negative_numbers = true)]
+        gate: Option<f32>,
+        /// Compressor amount 0 (off) to 10.
+        #[arg(long)]
+        comp: Option<f32>,
+        /// Low shelf gain (dB).
+        #[arg(long, allow_negative_numbers = true)]
+        low: Option<f32>,
+        /// Mid gain (dB).
+        #[arg(long, allow_negative_numbers = true)]
+        mid: Option<f32>,
+        /// High shelf gain (dB).
+        #[arg(long, allow_negative_numbers = true)]
+        high: Option<f32>,
+    },
     /// Platform feature support of this build (no engine needed).
     Capabilities,
     /// Audio devices on this machine, without a running engine.
@@ -132,6 +152,16 @@ fn main() -> anyhow::Result<()> {
         Cmd::BusMute { bus, state } => Request::SetBusMute { bus, mute: state.into() },
         Cmd::Solo { strip, state } => Request::SetStripSolo { strip, solo: state.into() },
         Cmd::Route { strip, bus, state } => Request::SetRoute { strip, bus, enabled: state.into() },
+        Cmd::Fx { strip, gate, comp, low, mid, high } => {
+            let Response::Status(s) = c.request(&Request::Status)? else { anyhow::bail!("unexpected answer") };
+            let mut fx = s.strips.get(usize::from(strip)).context("no such strip")?.fx;
+            fx.gate_threshold_db = gate.unwrap_or(fx.gate_threshold_db);
+            fx.comp_amount = comp.unwrap_or(fx.comp_amount);
+            fx.eq_low_db = low.unwrap_or(fx.eq_low_db);
+            fx.eq_mid_db = mid.unwrap_or(fx.eq_mid_db);
+            fx.eq_high_db = high.unwrap_or(fx.eq_high_db);
+            Request::SetStripFx { strip, fx }
+        }
         Cmd::Shutdown => Request::Shutdown,
         Cmd::Capabilities | Cmd::LocalDevices | Cmd::DefaultConfig | Cmd::Autostart { .. } => {
             unreachable!("handled above")
@@ -167,8 +197,20 @@ fn main() -> anyhow::Result<()> {
             }
             println!("strips:");
             for (i, st) in s.strips.iter().enumerate() {
+                let f = st.fx;
+                let mut fx = Vec::new();
+                if f.gate_threshold_db > -80.0 {
+                    fx.push(format!("gate {:.0} dB", f.gate_threshold_db));
+                }
+                if f.comp_amount > 0.0 {
+                    fx.push(format!("comp {:.1}", f.comp_amount));
+                }
+                if f.eq_low_db != 0.0 || f.eq_mid_db != 0.0 || f.eq_high_db != 0.0 {
+                    fx.push(format!("EQ {:+.1}/{:+.1}/{:+.1} dB", f.eq_low_db, f.eq_mid_db, f.eq_high_db));
+                }
+                let fx = if fx.is_empty() { String::new() } else { format!("  fx: {}", fx.join(", ")) };
                 println!(
-                    "  {i}: {:16} {:>6.1} dB{}{}  → {:?}  [{}]",
+                    "  {i}: {:16} {:>6.1} dB{}{}  → {:?}  [{}]{fx}",
                     st.name,
                     st.gain_db,
                     if st.mute { " M" } else { "" },

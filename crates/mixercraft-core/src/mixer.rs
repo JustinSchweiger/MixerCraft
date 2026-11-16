@@ -19,6 +19,7 @@ use std::sync::Arc;
 use crate::buffer::AudioBlock;
 use crate::channel_map::ChannelMap;
 use crate::dsp::{self, GainShape, SmoothedGain};
+use crate::fx::{FxParams, StripFx};
 use crate::meter::MeterBank;
 use crate::{MAX_BUSES, MAX_CHANNELS};
 
@@ -35,13 +36,15 @@ pub struct StripSpec {
     pub solo: bool,
     /// Bitmask of buses this strip feeds (bit `n` = bus `n`).
     pub routes: u64,
+    /// Gate, EQ and compressor settings.
+    pub fx: FxParams,
 }
 
 impl StripSpec {
-    /// A stereo strip at unity gain, routed nowhere.
+    /// A stereo strip at unity gain, routed nowhere, without processing.
     #[must_use]
     pub fn stereo() -> Self {
-        Self { channels: 2, gain_db: 0.0, mute: false, solo: false, routes: 0 }
+        Self { channels: 2, gain_db: 0.0, mute: false, solo: false, routes: 0, fx: FxParams::default() }
     }
 }
 
@@ -114,6 +117,8 @@ pub enum MixerCommand {
     StripSolo { strip: u16, solo: bool },
     /// Connects or disconnects a strip from a bus.
     Route { strip: u16, bus: u16, enabled: bool },
+    /// Sets a strip's gate, EQ and compressor.
+    StripFx { strip: u16, params: FxParams },
     /// Sets a bus fader (dB).
     BusGain { bus: u16, db: f32 },
     /// Mutes or unmutes a bus.
@@ -136,6 +141,7 @@ struct Strip {
     mute: bool,
     solo: bool,
     fader: SmoothedGain,
+    fx: StripFx,
     routes: u64,
     sends: Vec<SmoothedGain>,
     maps: Vec<ChannelMap>,
@@ -217,6 +223,11 @@ impl Mixer {
                     mute: s.mute,
                     solo: s.solo,
                     fader: SmoothedGain::new(strip_target(s.gain_db, s.mute, s.solo, solo_active), ramp),
+                    fx: {
+                        let mut fx = StripFx::new(sample_rate);
+                        fx.set_params(s.fx);
+                        fx
+                    },
                     routes,
                     sends: (0..buses.len())
                         .map(|b| SmoothedGain::new(if routes & (1 << b) != 0 { 1.0 } else { 0.0 }, ramp))
@@ -331,6 +342,9 @@ impl Mixer {
                 }
                 s.sends[bus as usize].set_target(if enabled { 1.0 } else { 0.0 });
             }
+            MixerCommand::StripFx { strip, params } => {
+                self.strip_mut(strip)?.fx.set_params(params);
+            }
             MixerCommand::BusGain { bus, db } => {
                 if db.is_nan() {
                     return Err(MixerError::InvalidGain);
@@ -384,6 +398,7 @@ impl Mixer {
             for ch in 0..strip.input.channels() {
                 report.non_finite += dsp::sanitize(strip.input.channel_mut(ch));
             }
+            strip.fx.process(&mut strip.input);
             let shape = strip.fader.render(ramp_fader);
             for ch in 0..strip.input.channels() {
                 dsp::apply_gain(strip.input.channel_mut(ch), shape, ramp_fader);
@@ -526,6 +541,31 @@ mod tests {
         let max_step = out.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max);
         assert!(max_step <= 1.0 / ramp_len as f32 + 1e-6, "step {max_step}");
         assert_eq!(out[1023], 1.0);
+    }
+
+    #[test]
+    fn strip_fx_apply_before_the_fader_and_can_be_changed_live() {
+        let mut l = layout(1, 1);
+        l.strips[0].routes = 1;
+        let mut m = Mixer::new(&l, 256, SR).unwrap();
+        m.apply(MixerCommand::StripFx {
+            strip: 0,
+            params: FxParams { gate_threshold_db: -20.0, ..FxParams::default() },
+        })
+        .unwrap();
+        // 0.01 (-40 dBFS) is below the -20 dB gate: after the hold (50 ms)
+        // and release (120 ms time constant) it is closed.
+        for _ in 0..200 {
+            fill(&mut m, 0, 0.01, 256);
+            m.process(256);
+        }
+        assert!(m.bus_output(0).channel(0).iter().all(|s| s.abs() < 1e-4));
+        assert_eq!(
+            m.apply(MixerCommand::StripFx { strip: 3, params: FxParams::default() }),
+            Err(MixerError::NoSuchStrip)
+        );
+        m.apply(MixerCommand::StripFx { strip: 0, params: FxParams::default() }).unwrap();
+        assert!((settle(&mut m, &[0.01], 0) - 0.01).abs() < 1e-6, "bypassed again");
     }
 
     #[test]
