@@ -28,6 +28,7 @@ pub enum Cmd {
     StripSolo(u16, bool),
     Route { strip: u16, bus: u16, on: bool },
     StartEngine,
+    StopEngine,
 }
 
 /// Something the UI should show.
@@ -66,6 +67,7 @@ fn request_for(cmd: &Cmd) -> Option<Request> {
         Cmd::BusMute(bus, mute) => Request::SetBusMute { bus, mute },
         Cmd::StripSolo(strip, solo) => Request::SetStripSolo { strip, solo },
         Cmd::Route { strip, bus, on } => Request::SetRoute { strip, bus, enabled: on },
+        Cmd::StopEngine => Request::Shutdown,
         Cmd::StartEngine => return None,
     })
 }

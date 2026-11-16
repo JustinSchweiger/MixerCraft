@@ -24,7 +24,7 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
    LaunchAgent).
 3. Linux virtual devices (PipeWire null-audio-sink nodes) — the first
    platform where virtual endpoints need no signing.
-4. GUI: tray icon, then gate/compressor/EQ (engine DSP + strip panel), then global hotkeys.
+4. GUI: gate/compressor/EQ (engine DSP + strip panel), then global hotkeys; Linux tray (KSNI); GUI autostart with `--tray`.
 5. Native WASAPI backend for low latency.
 6. macOS HAL plug-in; Windows driver once signing is arranged.
 

@@ -2,6 +2,10 @@
 //!
 //! A thin client: all audio runs in `mixercraftd`. The window can be closed,
 //! crash or restart at any time without affecting audio.
+//!
+//! On Windows and macOS the app lives in the system tray: closing the window
+//! hides it, and a second launch shows the running instance. `--tray` starts
+//! hidden (for sign-in).
 
 // No console window for the GUI on Windows (release builds).
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
@@ -9,6 +13,8 @@
 mod engine;
 mod fader_law;
 mod meters;
+#[cfg(any(windows, target_os = "macos"))]
+mod tray;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -40,6 +46,38 @@ const LOCAL_EDIT_GRACE: Duration = Duration::from_millis(1500);
 
 thread_local! {
     static LOCAL_EDITS: RefCell<HashMap<(bool, usize), Instant>> = RefCell::new(HashMap::new());
+    #[cfg(any(windows, target_os = "macos"))]
+    static TRAY: RefCell<Option<tray::Tray>> = const { RefCell::new(None) };
+}
+
+/// Whether a tray icon exists (closing the window then only hides it).
+fn has_tray() -> bool {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        TRAY.with(|t| t.borrow().is_some())
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        false
+    }
+}
+
+/// Mirrors strip mutes, connection and status into the tray.
+fn update_tray(ui: &MainWindow) {
+    #[cfg(any(windows, target_os = "macos"))]
+    TRAY.with(|t| {
+        if let Some(tray) = t.borrow_mut().as_mut() {
+            let strips: Vec<(String, bool)> = ui.get_strips().iter().map(|s| (s.name.to_string(), s.mute)).collect();
+            tray.update(&strips, ui.get_connected(), &format!("MixerCraft — {}", ui.get_status_text()));
+        }
+    });
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let _ = ui;
+}
+
+fn show_window(ui: &MainWindow) {
+    let _ = ui.show();
+    ui.window().set_minimized(false);
 }
 
 fn mark_edit(bus: bool, i: usize) {
@@ -226,8 +264,10 @@ fn apply(ui: &MainWindow, update: Update) {
         Update::Meters { strips, buses } => {
             apply_meters(&ui.get_strip_meters(), &strips);
             apply_meters(&ui.get_bus_meters(), &buses);
+            return;
         }
     }
+    update_tray(ui);
 }
 
 /// Updates one strip row in place for immediate visual feedback.
@@ -248,6 +288,20 @@ fn set_gain(row: &mut StripView, pos: f32) -> f32 {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
+    let start_hidden = std::env::args().any(|a| a == "--tray");
+
+    // Single instance: if the app is already running, show it and exit.
+    let instance = match mixercraft_ipc::gui_instance::claim() {
+        Ok(listener) => Some(listener),
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            if mixercraft_ipc::gui_instance::activate_existing().is_ok() {
+                return Ok(());
+            }
+            None
+        }
+        Err(_) => None,
+    };
+
     let ui = MainWindow::new()?;
     ui.set_strips(ModelRc::new(VecModel::<StripView>::default()));
     ui.set_buses(ModelRc::new(VecModel::<StripView>::default()));
@@ -323,10 +377,109 @@ fn main() -> Result<(), slint::PlatformError> {
         mark_edit(false, i as usize);
         let _ = t.send(Cmd::Route { strip: i as u16, bus: b as u16, on });
     });
-    let t = tx;
+    let t = tx.clone();
     ui.on_start_engine(move || {
         let _ = t.send(Cmd::StartEngine);
     });
 
-    ui.run()
+    if let Some(listener) = instance {
+        let w = ui.as_weak();
+        std::thread::Builder::new()
+            .name("mixercraft-gui-instance".into())
+            .spawn(move || {
+                mixercraft_ipc::gui_instance::serve(&listener, || {
+                    let w = w.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = w.upgrade() {
+                            show_window(&ui);
+                        }
+                    });
+                });
+            })
+            .expect("spawn instance listener");
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    install_tray(&ui, tx);
+    #[cfg(not(any(windows, target_os = "macos")))]
+    drop(tx);
+
+    ui.window().on_close_requested(|| {
+        if !has_tray() {
+            let _ = slint::quit_event_loop();
+        }
+        slint::CloseRequestResponse::HideWindow
+    });
+
+    if !(start_hidden && cfg!(any(windows, target_os = "macos"))) {
+        ui.show()?;
+    }
+    slint::run_event_loop_until_quit()
+}
+
+/// Creates the tray once the event loop runs and routes its events.
+#[cfg(any(windows, target_os = "macos"))]
+fn install_tray(ui: &MainWindow, tx: mpsc::Sender<Cmd>) {
+    use tray_icon::menu::MenuEvent;
+    use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
+
+    fn act(ui: &MainWindow, action: tray::Action, tx: &mpsc::Sender<Cmd>) {
+        match action {
+            tray::Action::Show => show_window(ui),
+            tray::Action::ToggleMute(i) => ui.invoke_strip_mute(i as i32),
+            tray::Action::ToggleEngine => {
+                let _ = tx.send(if ui.get_connected() { Cmd::StopEngine } else { Cmd::StartEngine });
+            }
+            tray::Action::Quit => {
+                let _ = slint::quit_event_loop();
+            }
+        }
+    }
+
+    let w = ui.as_weak();
+    let menu_tx = tx.clone();
+    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+        let (w, tx) = (w.clone(), menu_tx.clone());
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = w.upgrade() else { return };
+            let action = TRAY.with(|t| t.borrow().as_ref().and_then(|t| t.action_for(&event.id)));
+            if let Some(action) = action {
+                act(&ui, action, &tx);
+            }
+        });
+    }));
+    let w = ui.as_weak();
+    TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
+        let show = matches!(
+            event,
+            TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }
+                | TrayIconEvent::DoubleClick { button: MouseButton::Left, .. }
+        );
+        if show {
+            let w = w.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = w.upgrade() {
+                    show_window(&ui);
+                }
+            });
+        }
+    }));
+
+    let w = ui.as_weak();
+    slint::Timer::single_shot(std::time::Duration::ZERO, move || match tray::Tray::new() {
+        Ok(tray) => {
+            TRAY.with(|t| *t.borrow_mut() = Some(tray));
+            if let Some(ui) = w.upgrade() {
+                update_tray(&ui);
+            }
+        }
+        Err(e) => {
+            // Without a tray, closing the window must quit and the window
+            // must be visible.
+            eprintln!("no tray icon: {e}");
+            if let Some(ui) = w.upgrade() {
+                show_window(&ui);
+            }
+        }
+    });
 }

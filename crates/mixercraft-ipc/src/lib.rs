@@ -303,18 +303,90 @@ pub fn endpoint_description() -> String {
     endpoint_string()
 }
 
-#[cfg(windows)]
 fn endpoint_string() -> String {
+    endpoint_for(&format!("mixercraft-engine-v{PROTOCOL_VERSION}"))
+}
+
+/// Per-user endpoint string for `base` (a pipe name on Windows, a socket
+/// path in the user's runtime directory elsewhere).
+#[cfg(windows)]
+fn endpoint_for(base: &str) -> String {
     let user: String =
         std::env::var("USERNAME").unwrap_or_default().chars().filter(char::is_ascii_alphanumeric).collect();
-    format!("mixercraft-engine-v{PROTOCOL_VERSION}-{user}")
+    format!("{base}-{user}")
 }
 
 #[cfg(unix)]
-fn endpoint_string() -> String {
+fn endpoint_for(base: &str) -> String {
     let dir = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
     let user: String = std::env::var("USER").unwrap_or_default().chars().filter(char::is_ascii_alphanumeric).collect();
-    dir.join(format!("mixercraft-engine-v{PROTOCOL_VERSION}-{user}.sock")).to_string_lossy().into_owned()
+    dir.join(format!("{base}-{user}.sock")).to_string_lossy().into_owned()
+}
+
+/// Binds `s`, removing a stale Unix socket file nobody answers on.
+///
+/// If binding fails while another process answers on the endpoint, the
+/// error is reported as [`io::ErrorKind::AddrInUse`]. (On Windows a second
+/// first-instance named pipe fails with "access denied", which would
+/// otherwise be indistinguishable from a permissions problem.)
+fn bind_endpoint(s: &str) -> io::Result<Listener> {
+    #[cfg(unix)]
+    {
+        if std::path::Path::new(s).exists() && Stream::connect(endpoint_name(s)?).is_err() {
+            let _ = std::fs::remove_file(s);
+        }
+    }
+    ListenerOptions::new().name(endpoint_name(s)?).create_sync().map_err(|e| {
+        if e.kind() != io::ErrorKind::AddrInUse && endpoint_name(s).and_then(Stream::connect).is_ok() {
+            io::Error::new(io::ErrorKind::AddrInUse, format!("{s} is in use by another process"))
+        } else {
+            e
+        }
+    })
+}
+
+/// Desktop-app single-instance support: a second launch asks the first one
+/// to show its window instead of starting another copy.
+pub mod gui_instance {
+    use super::{BufRead, BufReader, Listener, Stream, Write, bind_endpoint, endpoint_for, endpoint_name, io};
+    use interprocess::local_socket::prelude::*;
+
+    fn endpoint() -> String {
+        endpoint_for("mixercraft-gui-v1")
+    }
+
+    /// Claims the single-instance endpoint. Fails with
+    /// [`io::ErrorKind::AddrInUse`] if another instance holds it.
+    ///
+    /// # Errors
+    /// I/O failures, including `AddrInUse`.
+    pub fn claim() -> io::Result<Listener> {
+        bind_endpoint(&endpoint())
+    }
+
+    /// Asks the running instance to show its window.
+    ///
+    /// # Errors
+    /// If no instance answers.
+    pub fn activate_existing() -> io::Result<()> {
+        let s = endpoint();
+        let mut stream = Stream::connect(endpoint_name(&s)?)?;
+        stream.write_all(b"show\n")?;
+        stream.flush()
+    }
+
+    /// Calls `on_show` (on this thread) for every activation request. Runs
+    /// until the listener fails.
+    pub fn serve(listener: &Listener, on_show: impl Fn()) {
+        for conn in listener.incoming() {
+            let Ok(conn) = conn else { continue };
+            let mut line = String::new();
+            let mut reader = BufReader::new(conn);
+            if reader.read_line(&mut line).is_ok() && line.trim() == "show" {
+                on_show();
+            }
+        }
+    }
 }
 
 fn endpoint_name(s: &str) -> io::Result<Name<'_>> {
@@ -336,16 +408,7 @@ fn endpoint_name(s: &str) -> io::Result<Name<'_>> {
 /// # Errors
 /// I/O failures, including `AddrInUse`.
 pub fn bind() -> io::Result<Listener> {
-    let s = endpoint_string();
-    #[cfg(unix)]
-    {
-        // A stale socket file from a crashed engine blocks binding. Only
-        // remove it if nobody answers on it.
-        if std::path::Path::new(&s).exists() && Stream::connect(endpoint_name(&s)?).is_err() {
-            let _ = std::fs::remove_file(&s);
-        }
-    }
-    ListenerOptions::new().name(endpoint_name(&s)?).create_sync()
+    bind_endpoint(&endpoint_string())
 }
 
 /// A connected, handshaken client.
