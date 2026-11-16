@@ -12,8 +12,8 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 | 5 | Virtual devices | 🗓 blocked on Windows by driver signing ([ADR 0007](adr/0007-windows-driver-signing.md)); Linux and macOS can start |
 | 6 | Background engine and recovery | 🟡 done: IPC, single instance, recovery state machine, watchdog, software clock fallback, diagnostics, config persistence, latency recovery, per-user autostart (Windows verified except an actual sign-in), log files, console-less engine. Missing: device-arrival notifications, sleep/resume tests, Windows service mode for pre-login start |
 | 7 | Production GUI | 🟡 Slint mixer window connected to the engine (faders, mute/solo, routing, LED meters, gate/comp/EQ knobs, diagnostics, engine start), tray icon, Settings tab (sign-in start, close button, peak hold, engine rate/latency/clock with restart, virtual-device status). Next: global hotkeys |
-| 8 | Packaging and release pipeline | 🗓 ([ADR 0006](adr/0006-distribution-and-updates.md)) |
-| 9 | Automatic updates | 🗓 |
+| 8 | Packaging and release pipeline | 🟡 Windows per-user MSI and build script done and verified ([releasing](development/releasing.md), [ADR 0006](adr/0006-distribution-and-updates.md)). Missing: code signing (SignPath for OSS, now possible with the public repo), release workflow, macOS/Linux packages |
+| 9 | Automatic updates | 🟡 Windows: check/notify/download/SHA-256/install verified against a local feed. Missing: signed manifests (minisign), first real GitHub release, macOS/Linux installer targets |
 | 10 | Hardening: long soak tests, self-hosted hardware runners | 🗓 |
 
 ## Next steps, in order
@@ -30,6 +30,9 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 5. GUI: global hotkeys; Linux tray (KSNI); verify the sign-in toggles of the Settings tab at an actual sign-in.
 6. Native WASAPI backend for low latency.
 7. macOS HAL plug-in; Windows driver once signing is arranged.
+8. Releases: publish v0.1.0 on GitHub Releases (MSI, checksum,
+   `latest.json`); sign feed manifests (minisign) and apply to SignPath for
+   Authenticode; per-machine MSI once a service mode exists.
 
 ## Hardware test log
 
@@ -49,6 +52,7 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 | 2026-11-16 | same | isolated test engine (virtual devices only, nothing audible) | Keep-awake, recorded by loopback from the virtual speaker it plays into: silent for ~10 s after being enabled, then a steady 15.0 Hz tone at -45.0 dBFS. Through a virtual *microphone* the tone was distorted by Windows capture processing (low cut, automatic gain), so capture endpoints are no measurement path. Noise suppression, speech-like bursts plus noise played into a strip and recorded by loopback: noise floor -39.2 → -69.6/-70.0 dBFS (two runs), speech -17.6 → -17.7 dBFS. Release build: cycle load 0.5–0.7 % → 1.3–1.9 % with one stereo strip denoised; engine process 3.4 % of one core. Another session was running a CPU stress test at the same time. |
 | 2026-11-16 | same | default-device memory (isolated engine, virtual recording device, communications role only) | Chosen as communications default → remembered; engine stopped → Windows fell back to the Scarlett; engine restarted → the virtual device was the default again; Scarlett chosen while the device was present → forgotten; next restart kept the Scarlett. The owner's defaults were unchanged afterwards. |
 | 2026-11-16 | same | Settings tab, isolated debug GUI and engine (no devices: one input with no source, two meter-only buses) | Sample rate, latency and clock-bus changes were saved to the configuration at once and showed the restart banner; Restart engine stopped the engine, waited for it to exit and started it with the same `--config`: it then ran at 44.1 kHz with max-stability and A2 as clock, banner gone. Close button set to "Quit the app" closed only the window (engine kept running); `gui.toml` held both preferences. Sign-in toggles showed "off" matching Task Scheduler; switching them was not exercised (it would register real logon tasks). |
+| 2026-11-16 | Windows 11 Pro 26300, x86_64, usbip-win2 0.9.8.1 installed | none (test engines ran a scratch config: one muted bus on an absent device, software clock) | Installer, round 1: per-user MSI 0.1.0 installed without elevation (files, Start-menu and desktop shortcuts, user PATH entry, usbip-win2 detected). Upgrade to 0.1.1 with the installed GUI and engine running: `close-app` closed both in < 0.5 s, no files-in-use prompt, configuration file unchanged. In-app update: the installed GUI found 9.9.9 on a local HTTP feed, showed "Update available", downloaded and verified the MSI and quit; the MSI left an engine running from another folder alone, upgraded and restarted the GUI. A tampered checksum was rejected and the download deleted. Uninstall removed files, shortcuts, tasks, PATH entry and registry key; configuration kept. Found and fixed: Windows Installer had rewritten the user PATH as REG_SZ. Round 2 (after merging the Settings tab; sign-in start now uses its "MixerCraft" task): install created the task (`--tray`); a sign-in start turned off before an upgrade stayed off, one left on stayed on (fixed: the old package's removal step had deleted it); uninstall removed this installation's tasks and left an engine task of another copy alone. |
 
 ## Known limitations found in testing
 

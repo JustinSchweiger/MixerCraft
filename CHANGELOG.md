@@ -24,6 +24,25 @@ All notable changes to this project are documented here. The format follows
     when it is missing.
 - IPC (protocol v1, additive): `set_engine_settings` request; status reports
   the configured `settings`, `restart_required` and `config_path`.
+- Windows installer: per-user MSI (no administrator rights) built with
+  `scripts/build-installer.ps1` (WiX Toolset 5, free). Start-menu entry;
+  optional desktop shortcut, start with Windows (the Settings tab's sign-in
+  task) and `mixercraft` on the user PATH. Explains when usbip-win2
+  (virtual devices) is missing, without installing drivers. Upgrades close the
+  app and this installation's engine first and keep the configuration;
+  uninstall removes this installation's sign-in tasks. See `docs/development/releasing.md`.
+- In-app updates: the app checks a release feed 20 s after start and daily
+  (can be turned off on the About tab), shows "Update available" in the title
+  bar, and on "Download and install" downloads the MSI, verifies its size and
+  SHA-256 and runs it; the app and engine restart afterwards. New crate
+  `mixercraft-update`; `mixercraft update [--feed URL] [--download]` checks
+  from the command line. Releases come from the GitHub Releases of the
+  public repository (ADR 0006); the feed URL can be changed in
+  `updates.toml`.
+- `mixercraft close-app` closes the app and stops the engine of this
+  installation (used by the installer); `mixercraft autostart enable --app`
+  and `disable [--app] [--if-under <folder>]`; `autostart status` shows the
+  engine and the app.
 
 ### Changed
 - Minimum supported Rust version is now 1.95 (required by Slint).

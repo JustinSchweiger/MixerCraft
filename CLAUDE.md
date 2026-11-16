@@ -27,6 +27,10 @@ distribution, updates 9. Extensibility.
 * `crates/mixercraft-cli` — `mixercraft` client.
 * `crates/mixercraft-gui` — desktop mixer (Slint, software renderer). UI in
   `ui/*.slint` (colours in `ui/theme.slint`), IPC thread in `src/engine.rs`.
+* `crates/mixercraft-update` — update feed check, download, SHA-256
+  verification, MSI hand-off (ADR 0006); used by the GUI and CLI.
+* `installer/windows/` + `scripts/build-installer.ps1` — per-user WiX 5 MSI
+  (`docs/development/releasing.md`).
 * `docs/` — research, architecture, ADRs, feature matrix, roadmap.
 
 ## Commands

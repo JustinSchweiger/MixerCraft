@@ -2,11 +2,11 @@ import { Theme } from "theme.slint";
 import { PillButton, WindowButton } from "controls.slint";
 import { MixerView, StripView, MeterView } from "mixer.slint";
 import { DiagnosticsView, DeviceRow } from "diagnostics.slint";
-import { AboutView } from "about.slint";
+import { AboutView, UpdateView } from "about.slint";
 import { SettingsView, SettingsState, SettingKind } from "settings.slint";
 import { ScrollView } from "std-widgets.slint";
 
-export { StripView, MeterView, DeviceRow, SettingsState, SettingKind }
+export { StripView, MeterView, DeviceRow, SettingsState, SettingKind, UpdateView }
 
 // Invisible edge or corner that resizes the frameless window.
 // dir: 0 N, 1 S, 2 E, 3 W, 4 NE, 5 NW, 6 SE, 7 SW.
@@ -29,6 +29,7 @@ component TitleBar inherits Rectangle {
     in property <string> status-text;
     in property <color> status-color;
     in property <bool> max-state;
+    in property <bool> update-available;
     callback tab-selected(int);
     // Called on every left press on empty title-bar space; the Rust side
     // starts a window drag, or toggles maximise on a double press.
@@ -69,6 +70,11 @@ component TitleBar inherits Rectangle {
             }
         }
         Rectangle { horizontal-stretch: 1; }
+        if root.update-available: VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            PillButton { text: "Update available"; active: true; clicked => { root.tab-selected(2); } }
+        }
         VerticalLayout {
             alignment: center;
             horizontal-stretch: 0;
@@ -121,6 +127,12 @@ export component MainWindow inherits Window {
     // A short message from the engine (e.g. why a request was refused).
     in property <string> notice;
     in-out property <int> tab: 0;
+    in property <UpdateView> update: { state: 0, status: "Updates have not been checked yet." };
+    in property <bool> update-auto: true;
+    callback check-updates();
+    callback install-update();
+    callback set-update-auto(bool);
+    callback open-release-notes();
 
     in property <[StripView]> strips;
     in property <[MeterView]> strip-meters;
@@ -172,6 +184,7 @@ export component MainWindow inherits Window {
                 status-text: root.status-text;
                 status-color: root.status-color;
                 max-state: root.max-state;
+                update-available: root.update.state == 2;
                 tab-selected(t) => { root.tab = t; }
                 drag-window => { root.drag-window(); }
                 minimize => { root.minimize(); }
@@ -201,6 +214,12 @@ export component MainWindow inherits Window {
                 if root.tab == 2: AboutView {
                     vertical-stretch: 1;
                     version: root.version;
+                    update: root.update;
+                    update-auto: root.update-auto;
+                    check-updates => { root.check-updates(); }
+                    install-update => { root.install-update(); }
+                    set-update-auto(on) => { root.set-update-auto(on); }
+                    open-release-notes => { root.open-release-notes(); }
                 }
 
                 if root.tab == 3: SettingsView {

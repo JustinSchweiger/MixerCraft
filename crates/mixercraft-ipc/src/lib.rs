@@ -508,27 +508,97 @@ pub mod gui_instance {
         bind_endpoint(&endpoint())
     }
 
+    /// A request to the running GUI instance.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Message {
+        /// Show the window (a second launch of the app).
+        Show,
+        /// Quit the app (the installer replaces its files). Older GUIs
+        /// ignore this message.
+        Quit,
+    }
+
+    impl Message {
+        fn line(self) -> &'static [u8] {
+            match self {
+                Self::Show => {
+                    b"show
+"
+                }
+                Self::Quit => {
+                    b"quit
+"
+                }
+            }
+        }
+
+        fn parse(line: &str) -> Option<Self> {
+            match line.trim() {
+                "show" => Some(Self::Show),
+                "quit" => Some(Self::Quit),
+                _ => None,
+            }
+        }
+    }
+
+    /// Sends `message` to the running instance.
+    ///
+    /// # Errors
+    /// If no instance answers.
+    pub fn send(message: Message) -> io::Result<()> {
+        let s = endpoint();
+        let mut stream = Stream::connect(endpoint_name(&s)?)?;
+        stream.write_all(message.line())?;
+        stream.flush()
+    }
+
     /// Asks the running instance to show its window.
     ///
     /// # Errors
     /// If no instance answers.
     pub fn activate_existing() -> io::Result<()> {
-        let s = endpoint();
-        let mut stream = Stream::connect(endpoint_name(&s)?)?;
-        stream.write_all(b"show\n")?;
-        stream.flush()
+        send(Message::Show)
     }
 
-    /// Calls `on_show` (on this thread) for every activation request. Runs
-    /// until the listener fails.
-    pub fn serve(listener: &Listener, on_show: impl Fn()) {
+    /// Whether a GUI instance is running (holds the endpoint).
+    #[must_use]
+    pub fn is_running() -> bool {
+        let s = endpoint();
+        endpoint_name(&s).and_then(Stream::connect).is_ok()
+    }
+
+    /// Calls `on_message` (on this thread) for every request. Runs until the
+    /// listener fails.
+    pub fn serve(listener: &Listener, on_message: impl Fn(Message)) {
         for conn in listener.incoming() {
             let Ok(conn) = conn else { continue };
             let mut line = String::new();
             let mut reader = BufReader::new(conn);
-            if reader.read_line(&mut line).is_ok() && line.trim() == "show" {
-                on_show();
+            if reader.read_line(&mut line).is_ok()
+                && let Some(message) = Message::parse(&line)
+            {
+                on_message(message);
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::Message;
+
+        #[test]
+        fn messages_round_trip() {
+            for m in [Message::Show, Message::Quit] {
+                let line = std::str::from_utf8(m.line()).unwrap();
+                assert_eq!(Message::parse(line), Some(m));
+            }
+            assert_eq!(
+                Message::parse(
+                    "restart
+"
+                ),
+                None
+            );
         }
     }
 }
