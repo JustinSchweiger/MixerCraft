@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Linux and macOS builds: an unused constant in `mixercraft-winaudio` failed
+  CI (`-D warnings`).
+
+## [0.1.0] - 2026-11-16
+
+First release: Windows installer on
+[GitHub Releases](https://github.com/JustinSchweiger/MixerCraft/releases/tag/v0.1.0).
+
 ### Added
 - Settings tab in the desktop app:
   - Startup (Windows): open MixerCraft hidden in the tray when you sign in
@@ -180,3 +189,6 @@ All notable changes to this project are documented here. The format follows
 - CI on Linux (x86_64, ARM64), Windows, macOS, cross-checks for Windows ARM64
   and macOS x86_64, MSRV check, cargo-deny supply-chain checks, Dependabot.
 - Research report, architecture docs, feature matrix, ADRs 0001–0008.
+
+[Unreleased]: https://github.com/JustinSchweiger/MixerCraft/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/JustinSchweiger/MixerCraft/releases/tag/v0.1.0
