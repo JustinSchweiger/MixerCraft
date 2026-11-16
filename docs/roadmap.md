@@ -33,3 +33,15 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 | Date | Platform | Devices | Result |
 |---|---|---|---|
 | 2026-11-16 | Windows 11 Pro 26300, x86_64 | master: onboard HDA S/PDIF; input: Scarlett Solo USB; output: Voicemeeter VAIO virtual input | Startup to audio 208–234 ms. Gain, mute, solo, routing and meters verified over IPC. Config persisted atomically. 7-minute release run: 0 errors; 1 input and 2 output FIFO underruns while the machine was compiling on all cores, after which adaptive targets settled at 30/45 ms; drift corrections within ±5 ppm. |
+| 2026-11-16 | same | same | 4-minute release run with timestamped FIFO events: zero underruns at startup (warm-up + measured targets at 960 frames / 20 ms); one simultaneous underrun on both FIFOs at 85 s with engine load ≤ 2.7 %, consistent with a delayed master-device callback during heavy compilation (cause not proven). Both targets then rose to 2160 frames (45 ms) and stayed there. |
+
+## Known limitations found in testing
+
+* **FIFO latency only ever grows.** After a stall, the catch-up burst becomes
+  the "largest writer block" and a genuine underrun raises the target by
+  50 %; nothing lowers it again. Planned fix: decaying maximum for observed
+  block sizes and a slow target reduction after a long glitch-free period
+  (e.g. 10 minutes), bounded by the profile minimum.
+* **Drift ripple after re-priming.** The controller keeps its learned ratio
+  but the fill jumps; transient corrections up to ~90 ppm were observed
+  right after an underrun, settling within the loop time constant.
