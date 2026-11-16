@@ -72,7 +72,11 @@ export component DiagnosticsView inherits VerticalLayout {
             spacing: 4px;
             Text { text: "Recovery log (newest first)"; font-size: 11px; color: Theme.text-dim; }
             ScrollView {
+                // `alignment: start` keeps the rows at their preferred
+                // height: the viewport is at least as tall as the panel,
+                // and without it a few events are spread across all of it.
                 VerticalLayout {
+                    alignment: start;
                     spacing: 2px;
                     for e in root.events: Cell { text: e; }
                 }
