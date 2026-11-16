@@ -46,8 +46,37 @@ enum Cmd {
     Route { strip: u16, bus: u16, state: OnOff },
     /// Platform feature support of this build (no engine needed).
     Capabilities,
+    /// Audio devices on this machine, without a running engine.
+    LocalDevices,
+    /// Print the default engine configuration.
+    DefaultConfig,
+    /// Start the engine automatically when you sign in.
+    Autostart {
+        #[command(subcommand)]
+        action: AutostartCmd,
+    },
     /// Stop the engine.
     Shutdown,
+}
+
+#[derive(Debug, Subcommand)]
+enum AutostartCmd {
+    /// Register the engine to start at sign-in.
+    Enable {
+        /// Configuration file the engine should use (default: per-user config).
+        #[arg(long)]
+        config: Option<std::path::PathBuf>,
+        /// Path of mixercraftd (default: next to this program).
+        #[arg(long)]
+        engine: Option<std::path::PathBuf>,
+        /// Also start the engine now through the same mechanism.
+        #[arg(long)]
+        now: bool,
+    },
+    /// Remove the sign-in registration.
+    Disable,
+    /// Show whether autostart is registered.
+    Status,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -68,12 +97,28 @@ fn db(x: f32) -> String {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    if let Cmd::Capabilities = args.command {
-        for f in Feature::ALL {
-            let (s, why) = capabilities::support(f);
-            println!("{:28} {:12} {why}", f.name(), format!("{s:?}"));
+    match &args.command {
+        Cmd::Capabilities => {
+            for f in Feature::ALL {
+                let (s, why) = capabilities::support(f);
+                println!("{:28} {:12} {why}", f.name(), format!("{s:?}"));
+            }
+            return Ok(());
         }
-        return Ok(());
+        Cmd::LocalDevices => {
+            let audio = mixercraft_platform::AudioSystem::new();
+            println!("backend: {}", audio.backend_name());
+            for d in audio.devices()? {
+                print_device(&d.name, &d.id, d.is_input, d.is_output, d.is_default_input || d.is_default_output);
+            }
+            return Ok(());
+        }
+        Cmd::DefaultConfig => {
+            print!("{}", mixercraft_config::Config::default().to_toml()?);
+            return Ok(());
+        }
+        Cmd::Autostart { action } => return autostart(action),
+        _ => {}
     }
     let mut c =
         Client::connect("mixercraft-cli").context("cannot reach the MixerCraft engine (is mixercraftd running?)")?;
@@ -88,7 +133,9 @@ fn main() -> anyhow::Result<()> {
         Cmd::Solo { strip, state } => Request::SetStripSolo { strip, solo: state.into() },
         Cmd::Route { strip, bus, state } => Request::SetRoute { strip, bus, enabled: state.into() },
         Cmd::Shutdown => Request::Shutdown,
-        Cmd::Capabilities => unreachable!("handled above"),
+        Cmd::Capabilities | Cmd::LocalDevices | Cmd::DefaultConfig | Cmd::Autostart { .. } => {
+            unreachable!("handled above")
+        }
     };
     let json = matches!(args.command, Cmd::Status { json: true });
     match c.request(&req)? {
@@ -160,17 +207,67 @@ fn main() -> anyhow::Result<()> {
         }
         Response::Devices { devices } => {
             for d in devices {
-                let dir = match (d.is_input, d.is_output) {
-                    (true, true) => "in/out",
-                    (true, false) => "in",
-                    _ => "out",
-                };
-                let def = if d.is_default_input || d.is_default_output { " (default)" } else { "" };
-                println!("{dir:6} {}{def}\n       id: {}", d.name, d.id);
+                print_device(&d.name, &d.id, d.is_input, d.is_output, d.is_default_input || d.is_default_output);
             }
         }
         Response::Ok => println!("ok"),
         other => println!("{other:?}"),
     }
     Ok(())
+}
+
+fn print_device(name: &str, id: &str, is_input: bool, is_output: bool, is_default: bool) {
+    let dir = match (is_input, is_output) {
+        (true, true) => "in/out",
+        (true, false) => "in",
+        _ => "out",
+    };
+    let def = if is_default { " (default)" } else { "" };
+    println!("{dir:6} {name}{def}\n       id: {id}");
+}
+
+fn autostart(action: &AutostartCmd) -> anyhow::Result<()> {
+    use mixercraft_platform::autostart::{self, AutostartSpec, AutostartState};
+    match action {
+        AutostartCmd::Enable { config, engine, now } => {
+            let engine = match engine {
+                Some(p) => p.clone(),
+                None => {
+                    let exe = std::env::current_exe().context("cannot locate this program")?;
+                    exe.with_file_name(format!("mixercraftd{}", std::env::consts::EXE_SUFFIX))
+                }
+            };
+            let engine = std::fs::canonicalize(&engine)
+                .with_context(|| format!("engine not found at {} (use --engine)", engine.display()))?;
+            let mut args = Vec::new();
+            if let Some(config) = config {
+                let config = std::fs::canonicalize(config)
+                    .with_context(|| format!("configuration not found: {}", config.display()))?;
+                args.push("--config".to_owned());
+                args.push(strip_verbatim(&config));
+            }
+            let spec = AutostartSpec { engine: strip_verbatim(&engine).into(), args };
+            autostart::enable(&spec, *now)?;
+            println!("autostart enabled: {}", spec.engine.display());
+            if *now {
+                println!("engine started");
+            }
+        }
+        AutostartCmd::Disable => {
+            autostart::disable()?;
+            println!("autostart disabled");
+        }
+        AutostartCmd::Status => match autostart::status()? {
+            AutostartState::Enabled { detail } => println!("enabled ({detail})"),
+            AutostartState::Disabled => println!("disabled"),
+        },
+    }
+    Ok(())
+}
+
+/// `canonicalize` on Windows returns `\\?\C:\...` paths, which some tools
+/// (Task Scheduler among them) do not accept. Plain drive paths are kept.
+fn strip_verbatim(p: &std::path::Path) -> String {
+    let s = p.to_string_lossy();
+    s.strip_prefix(r"\\?\").filter(|rest| !rest.starts_with("UNC")).unwrap_or(&s).to_owned()
 }

@@ -22,7 +22,9 @@ and runs the hardware-independent tests on all three platforms.
 | Virtual endpoints | 🗓 needs signed kernel driver | 🗓 PipeWire null-sink nodes | 🗓 AudioServerPlugIn |
 | Per-application capture | 🗓 WASAPI process loopback | 🗓 PipeWire stream links | 🗓 process taps (macOS 14.2+) |
 | Per-application output routing | 🗓 undocumented API, feature-flagged | 🗓 `target.object` metadata | 🗓 taps + mute original |
-| Background service / autostart | 🗓 Windows service | 🗓 systemd user service | 🗓 LaunchAgent (SMAppService) |
+| Autostart with the user session | 🟡 Task Scheduler logon task; registration code done, start at sign-in not yet verified | 🟡 systemd user unit; unit file unit-tested, not run on hardware | 🟡 LaunchAgent; plist unit-tested, not run on hardware |
+| Engine without console window | ✅ release builds use the GUI subsystem (verified) | n/a (no console by design) | n/a (no console by design) |
+| Engine log files | ✅ daily rotation, 7 days (verified) | ✅ CI only | ✅ CI only |
 | Engine before login | 🗓 service; startup-sound routing to be verified | ⛔ PipeWire is per user session | ⛔ firmware chime not routable |
 | Desktop GUI | 🗓 phase 7 | 🗓 | 🗓 |
 | Installers | 🗓 MSI | 🗓 .deb / .rpm / AppImage | 🗓 .pkg / .dmg |

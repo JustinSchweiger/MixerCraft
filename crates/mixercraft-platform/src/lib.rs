@@ -15,6 +15,7 @@
 //! owns and drops all streams on a single supervisor thread; only the data
 //! callbacks run on the backend's real-time threads.
 
+pub mod autostart;
 pub mod capabilities;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};

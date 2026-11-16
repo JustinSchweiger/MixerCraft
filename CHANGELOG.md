@@ -14,6 +14,11 @@ All notable changes to this project are documented here. The format follows
   longer causes a seconds-long pitch correction.
 
 ### Added
+- `mixercraft autostart enable|disable|status`: Task Scheduler logon task
+  (Windows), systemd user unit (Linux), LaunchAgent (macOS).
+- Engine logs to a daily rotating file (7 days) in the per-user data
+  directory; Windows release builds of `mixercraftd` open no console window.
+- `mixercraft local-devices` and `mixercraft default-config`.
 - Real-time audio core: planar buffers, click-free gain smoothing, lock-free
   peak/RMS meters, channel mapping, strip/bus mixer with mute, solo and
   routing matrix, NaN containment.
