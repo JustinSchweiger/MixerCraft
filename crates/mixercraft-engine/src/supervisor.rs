@@ -536,6 +536,8 @@ impl Supervisor {
         let slot = &mut self.slots[i];
         slot.generation = next_generation();
         let gen_ = slot.generation;
+        let (label_selector, label_text, label_speaker) =
+            (slot.selector.clone(), slot.label.clone(), matches!(slot.role, Role::Input { .. }));
         let tx = self.events_tx.clone();
         let on_error = move |fault: StreamFault| {
             let _ = tx.send(DeviceEvent { generation: gen_, fault });
@@ -628,6 +630,8 @@ impl Supervisor {
 
         match result {
             Ok(Opened { stream, fifo: fifo_stats, direct_master, command }) => {
+                // Virtual devices show the strip's or bus's name in Windows.
+                self.audio.set_virtual_label(&label_selector, label_speaker, &label_text);
                 let slot = &mut self.slots[i];
                 info!(
                     device = %stream.info.device_name,
@@ -887,6 +891,7 @@ impl Supervisor {
             };
             if ours {
                 slot.label = name.into();
+                self.audio.set_virtual_label(&slot.selector, !bus, name);
             }
         }
         self.dirty_since = Some(Instant::now());
