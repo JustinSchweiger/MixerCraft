@@ -424,6 +424,12 @@ pub fn default_path() -> Option<PathBuf> {
     directories::ProjectDirs::from("", "", "MixerCraft").map(|d| d.config_dir().join("config.toml"))
 }
 
+/// The per-user directory for engine log files.
+#[must_use]
+pub fn default_log_dir() -> Option<PathBuf> {
+    directories::ProjectDirs::from("", "", "MixerCraft").map(|d| d.data_local_dir().join("logs"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

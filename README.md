@@ -61,6 +61,18 @@ Control it from another terminal:
 
 See `mixercraft --help` for routing, mute, solo and meters.
 
+Start the engine automatically when you sign in (Task Scheduler on Windows,
+systemd user unit on Linux, LaunchAgent on macOS):
+
+```bash
+./target/release/mixercraft autostart enable --now
+```
+
+Release builds of `mixercraftd` on Windows run without a console window;
+engine logs are written to `%LOCALAPPDATA%\MixerCraft\data\logs` (Windows),
+`~/.local/share/mixercraft/logs` (Linux) or
+`~/Library/Application Support/MixerCraft/logs` (macOS).
+
 ## Documentation
 
 * [Architecture overview](docs/architecture/overview.md)

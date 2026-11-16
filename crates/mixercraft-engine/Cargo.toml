@@ -23,6 +23,7 @@ clap.workspace = true
 ctrlc.workspace = true
 rtrb.workspace = true
 tracing.workspace = true
+tracing-appender.workspace = true
 tracing-subscriber.workspace = true
 
 [lints]

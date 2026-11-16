@@ -3,6 +3,15 @@
 //! Runs headless, independent of any GUI. Clients (GUI, `mixercraft` CLI)
 //! connect over the versioned IPC protocol; closing or crashing a client
 //! never affects audio.
+//!
+//! Release builds on Windows use the GUI subsystem so that starting the
+//! engine at login never opens a console window. Logs always go to a daily
+//! rotating file (see `--log-dir`) and, when attached to a terminal, also to
+//! stderr. Use the `mixercraft` CLI for interactive commands.
+
+// No console window for the background engine on Windows (release only, so
+// debug builds keep their console for development).
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod clock;
 mod supervisor;
@@ -39,15 +48,56 @@ struct Args {
     /// Log filter, e.g. `info` or `mixercraft=debug`.
     #[arg(long, default_value = "info", env = "MIXERCRAFT_LOG")]
     log: String,
+    /// Directory for log files (default: the per-user data directory).
+    #[arg(long)]
+    log_dir: Option<PathBuf>,
+}
+
+/// Number of daily log files kept.
+const LOG_FILES_KEPT: usize = 7;
+
+/// Sets up logging to stderr and to a rotating file. The returned guard
+/// flushes the file writer when dropped.
+fn init_logging(filter: &str, dir: Option<PathBuf>) -> Option<tracing_appender::non_blocking::WorkerGuard> {
+    use std::io::IsTerminal;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let filter = tracing_subscriber::EnvFilter::try_new(filter).unwrap_or_else(|_| "info".into());
+    let stderr =
+        tracing_subscriber::fmt::layer().with_writer(std::io::stderr).with_ansi(std::io::stderr().is_terminal());
+    let file = dir.and_then(|dir| {
+        tracing_appender::rolling::Builder::new()
+            .rotation(tracing_appender::rolling::Rotation::DAILY)
+            .filename_prefix("mixercraftd")
+            .filename_suffix("log")
+            .max_log_files(LOG_FILES_KEPT)
+            .build(&dir)
+            .ok()
+            .map(|appender| (dir, tracing_appender::non_blocking(appender)))
+    });
+    match file {
+        Some((dir, (writer, guard))) => {
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(stderr)
+                .with(tracing_subscriber::fmt::layer().with_writer(writer).with_ansi(false))
+                .init();
+            info!(dir = %dir.display(), "logging to file");
+            Some(guard)
+        }
+        None => {
+            tracing_subscriber::registry().with(filter).with(stderr).init();
+            warn!("file logging unavailable; logging to stderr only");
+            None
+        }
+    }
 }
 
 fn main() -> anyhow::Result<()> {
     let process_start = Instant::now();
     let args = Args::parse();
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_new(&args.log).unwrap_or_else(|_| "info".into()))
-        .with_writer(std::io::stderr)
-        .init();
+    let _log_guard = init_logging(&args.log, args.log_dir.clone().or_else(mixercraft_config::default_log_dir));
 
     if args.print_default_config {
         print!("{}", Config::default().to_toml()?);
@@ -86,7 +136,11 @@ fn main() -> anyhow::Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
     {
         let flag = Arc::clone(&shutdown);
-        ctrlc::set_handler(move || flag.store(true, Ordering::Relaxed)).context("cannot install signal handler")?;
+        // Without a console (Windows background start) there may be nothing
+        // to attach to; shutdown then comes over IPC or from the OS.
+        if let Err(e) = ctrlc::set_handler(move || flag.store(true, Ordering::Relaxed)) {
+            warn!("no Ctrl-C handler: {e}");
+        }
     }
 
     let (ipc_tx, ipc_rx) = mpsc::channel::<IpcCall>();

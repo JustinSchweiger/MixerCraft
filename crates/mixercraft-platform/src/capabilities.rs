@@ -84,7 +84,7 @@ pub fn support(feature: Feature) -> (Support, &'static str) {
         F::VirtualEndpoints => virtual_endpoints(),
         F::PerAppCapture => per_app_capture(),
         F::PreLoginEngine => pre_login(),
-        F::SessionAutostart => (S::Planned, "Background service integration is scheduled for phase 6"),
+        F::SessionAutostart => session_autostart(),
         F::InAppUpdates => (S::Planned, "Updater is scheduled for phase 9"),
     }
 }
@@ -96,6 +96,26 @@ fn follow_default() -> (Support, &'static str) {
 #[cfg(not(windows))]
 fn follow_default() -> (Support, &'static str) {
     (Support::Partial, "Default device is resolved when the stream opens; changes apply on restart")
+}
+
+#[cfg(windows)]
+fn session_autostart() -> (Support, &'static str) {
+    (
+        Support::Partial,
+        "Task Scheduler logon task (`mixercraft autostart enable`); start at actual sign-in not yet verified",
+    )
+}
+#[cfg(target_os = "linux")]
+fn session_autostart() -> (Support, &'static str) {
+    (Support::Partial, "systemd user unit (`mixercraft autostart enable`); not yet verified on hardware")
+}
+#[cfg(target_os = "macos")]
+fn session_autostart() -> (Support, &'static str) {
+    (Support::Partial, "LaunchAgent (`mixercraft autostart enable`); not yet verified on hardware")
+}
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+fn session_autostart() -> (Support, &'static str) {
+    (Support::Unsupported, "No supported service manager")
 }
 
 #[cfg(windows)]
