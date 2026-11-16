@@ -86,6 +86,8 @@ impl Defaults {
     }
 }
 
+/// Every flow and role (read only by the Windows implementation).
+#[cfg_attr(not(windows), allow(dead_code))]
 const ALL: [(Flow, Role); 6] = [
     (Flow::Render, Role::Console),
     (Flow::Render, Role::Multimedia),

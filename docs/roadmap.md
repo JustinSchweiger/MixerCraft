@@ -13,7 +13,7 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 | 6 | Background engine and recovery | 🟡 done: IPC, single instance, recovery state machine, watchdog, software clock fallback, diagnostics, config persistence, latency recovery, per-user autostart (Windows verified except an actual sign-in), log files, console-less engine. Missing: device-arrival notifications, sleep/resume tests, Windows service mode for pre-login start |
 | 7 | Production GUI | 🟡 Slint mixer window connected to the engine (faders, mute/solo, routing, LED meters, gate/comp/EQ knobs, diagnostics, engine start), tray icon, Settings tab (sign-in start, close button, peak hold, engine rate/latency/clock with restart, virtual-device status). Next: global hotkeys |
 | 8 | Packaging and release pipeline | 🟡 Windows per-user MSI and build script done and verified ([releasing](development/releasing.md), [ADR 0006](adr/0006-distribution-and-updates.md)). Missing: code signing (SignPath for OSS, now possible with the public repo), release workflow, macOS/Linux packages |
-| 9 | Automatic updates | 🟡 Windows: check/notify/download/SHA-256/install verified against a local feed. Missing: signed manifests (minisign), first real GitHub release, macOS/Linux installer targets |
+| 9 | Automatic updates | 🟡 Windows: check/notify/download/SHA-256/install verified against a local feed; v0.1.0 published on GitHub Releases (2026-11-16). Missing: signed manifests (minisign), macOS/Linux installer targets |
 | 10 | Hardening: long soak tests, self-hosted hardware runners | 🗓 |
 
 ## Next steps, in order
@@ -30,8 +30,7 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 5. GUI: global hotkeys; Linux tray (KSNI); verify the sign-in toggles of the Settings tab at an actual sign-in.
 6. Native WASAPI backend for low latency.
 7. macOS HAL plug-in; Windows driver once signing is arranged.
-8. Releases: publish v0.1.0 on GitHub Releases (MSI, checksum,
-   `latest.json`); sign feed manifests (minisign) and apply to SignPath for
+8. Releases: sign feed manifests (minisign) and apply to SignPath for
    Authenticode; per-machine MSI once a service mode exists.
 
 ## Hardware test log

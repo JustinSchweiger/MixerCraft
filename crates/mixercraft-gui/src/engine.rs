@@ -48,6 +48,8 @@ pub enum Cmd {
     /// Stores engine-wide settings (they apply at the next engine start).
     EngineSettings(mixercraft_ipc::EngineSettings),
     StartEngine,
+    /// Sent by the tray menu (Windows and macOS only).
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
     StopEngine,
     /// Stops the engine, waits until it has exited and starts it again.
     RestartEngine,
