@@ -37,8 +37,8 @@ use mixercraft_core::keepawake::KeepAwakeParams;
 use mixercraft_core::mixer::{BusSpec, Mixer, MixerCommand, MixerLayout, MixerMeters, StripSpec};
 use mixercraft_core::stats::FifoStats;
 use mixercraft_ipc::{
-    BusStatus, DeviceChoice, DeviceStatus, DeviceSummary, EngineState, EngineStatus, ErrorCode, FifoStatus, Level,
-    MeterSnapshot, RecoveryEvent, Request, Response, StripStatus,
+    BusStatus, DeviceChoice, DeviceStatus, DeviceSummary, EngineSettings, EngineState, EngineStatus, ErrorCode,
+    FifoStatus, LatencyProfile, Level, MeterSnapshot, RecoveryEvent, Request, Response, StripStatus,
 };
 use mixercraft_platform::{AudioSystem, DeviceSelector, FaultKind, OpenStream, StreamFault, StreamInfo, StreamRequest};
 use tracing::{debug, error, info, warn};
@@ -176,6 +176,9 @@ pub struct Supervisor {
     recovery_log: VecDeque<RecoveryEvent>,
     last_error: Option<String>,
     master_progress: (u64, Instant),
+    /// Engine settings the engine started with, and the id of the bus that
+    /// clocked it then (to tell when a restart is needed).
+    started_with: (mixercraft_config::EngineConfig, Option<String>),
 }
 
 fn selector_for_source(s: &Source) -> Option<DeviceSelector> {
@@ -289,6 +292,7 @@ impl Supervisor {
 
         let (events_tx, events_rx) = mpsc::channel();
         info!(sample_rate, devices = slots.len(), "engine configured");
+        let started_with = (config.engine.clone(), master_bus.map(|b| config.buses[b].id.clone()));
         Ok(Self {
             audio,
             config,
@@ -308,6 +312,7 @@ impl Supervisor {
             recovery_log: VecDeque::new(),
             last_error: None,
             master_progress: (0, now),
+            started_with,
         })
     }
 
@@ -879,6 +884,41 @@ impl Supervisor {
         r
     }
 
+    /// Stores engine-wide settings; they apply at the next engine start.
+    fn set_engine_settings(&mut self, settings: &EngineSettings) -> Response {
+        let mut config = self.config.clone();
+        config.engine.sample_rate = settings.sample_rate;
+        config.engine.latency_profile = match settings.latency_profile {
+            LatencyProfile::LowLatency => mixercraft_config::LatencyProfile::LowLatency,
+            LatencyProfile::Balanced => mixercraft_config::LatencyProfile::Balanced,
+            LatencyProfile::MaxStability => mixercraft_config::LatencyProfile::MaxStability,
+        };
+        config.engine.master_bus = settings.master_bus.clone().filter(|id| !id.is_empty());
+        if let Err(e) = config.validate() {
+            return Response::Error { code: ErrorCode::InvalidArgument, message: e.to_string() };
+        }
+        if config.engine != self.config.engine {
+            info!(?settings, "engine settings changed (apply at next start)");
+            self.config = config;
+            self.dirty_since = Some(Instant::now());
+            self.save_config(true);
+        }
+        Response::Ok
+    }
+
+    /// Whether the configured engine settings differ from those the engine
+    /// started with.
+    fn restart_required(&self) -> bool {
+        let (started, started_master) = &self.started_with;
+        let now = &self.config.engine;
+        let master_id = self.config.master_bus_index().map(|b| self.config.buses[b].id.clone());
+        now.sample_rate != started.sample_rate
+            || now.latency_profile != started.latency_profile
+            // Removing a bus pins an automatic master by id; only a change
+            // of the clocking bus itself needs a restart.
+            || (now.master_bus != started.master_bus && master_id != *started_master)
+    }
+
     fn rename(&mut self, bus: bool, i: usize, name: &str) -> Response {
         let name = name.trim();
         if name.is_empty() || name.chars().count() > MAX_NAME_CHARS {
@@ -994,6 +1034,7 @@ impl Supervisor {
                 self.dirty_since = Some(Instant::now());
                 return Response::Ok;
             }
+            Request::SetEngineSettings { settings } => return self.set_engine_settings(&settings),
             Request::AddStrip { name } => return self.add_strip(&name),
             Request::AddBus { name } => return self.add_bus(&name),
             Request::RemoveStrip { strip } => return self.remove_strip(usize::from(strip)),
@@ -1254,6 +1295,17 @@ impl Supervisor {
             virtual_devices: self.audio.virtual_devices_available().is_ok(),
             virtual_devices_note: self.audio.virtual_devices_available().err().unwrap_or_default(),
             noise_suppression_available: self.sample_rate == mixercraft_core::denoise::DENOISE_RATE,
+            settings: EngineSettings {
+                sample_rate: self.config.engine.sample_rate,
+                latency_profile: match self.config.engine.latency_profile {
+                    mixercraft_config::LatencyProfile::LowLatency => LatencyProfile::LowLatency,
+                    mixercraft_config::LatencyProfile::Balanced => LatencyProfile::Balanced,
+                    mixercraft_config::LatencyProfile::MaxStability => LatencyProfile::MaxStability,
+                },
+                master_bus: self.config.engine.master_bus.clone(),
+            },
+            restart_required: self.restart_required(),
+            config_path: self.config_path.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
         }
     }
 }
@@ -1324,6 +1376,51 @@ mod tests {
 
     fn ok(r: Response) {
         assert!(matches!(r, Response::Ok), "{r:?}");
+    }
+
+    #[test]
+    fn engine_settings_are_stored_and_flag_a_restart() {
+        let mut s = deviceless();
+        ok(s.handle_request(Request::AddBus { name: String::new() }));
+        let st = s.status();
+        assert_eq!(st.settings.sample_rate, 48_000);
+        assert_eq!(st.settings.master_bus.as_deref(), Some("A1"));
+        assert!(!st.restart_required);
+
+        // The same settings again: nothing to restart.
+        ok(s.handle_request(Request::SetEngineSettings { settings: st.settings.clone() }));
+        assert!(!s.status().restart_required);
+
+        let settings = EngineSettings {
+            sample_rate: 44_100,
+            latency_profile: LatencyProfile::MaxStability,
+            master_bus: Some("A2".into()),
+        };
+        ok(s.handle_request(Request::SetEngineSettings { settings: settings.clone() }));
+        assert_eq!(s.config.engine.sample_rate, 44_100);
+        assert_eq!(s.config.engine.latency_profile, mixercraft_config::LatencyProfile::MaxStability);
+        assert_eq!(s.config.master_bus_index(), Some(1));
+        let st = s.status();
+        assert_eq!(st.settings, settings);
+        assert!(st.restart_required);
+        // The running engine keeps its rate until it restarts.
+        assert_eq!(st.sample_rate, 48_000);
+
+        // Back to the start values: no restart needed.
+        let back = EngineSettings {
+            sample_rate: 48_000,
+            latency_profile: LatencyProfile::Balanced,
+            master_bus: Some("A1".into()),
+        };
+        ok(s.handle_request(Request::SetEngineSettings { settings: back }));
+        assert!(!s.status().restart_required);
+
+        // Invalid values are refused and change nothing.
+        let bad = EngineSettings { master_bus: Some("Z9".into()), ..EngineSettings::default() };
+        assert!(matches!(s.handle_request(Request::SetEngineSettings { settings: bad }), Response::Error { .. }));
+        let bad = EngineSettings { sample_rate: 1, ..EngineSettings::default() };
+        assert!(matches!(s.handle_request(Request::SetEngineSettings { settings: bad }), Response::Error { .. }));
+        assert_eq!(s.config.engine.sample_rate, 48_000);
     }
 
     #[test]

@@ -1,0 +1,329 @@
+import { Theme } from "theme.slint";
+import { PillButton, DeviceSelect } from "controls.slint";
+import { ScrollView } from "std-widgets.slint";
+
+// What a settings control changed; the value is a bool (0/1) or an index.
+export enum SettingKind {
+    app-autostart,
+    engine-autostart,
+    close-to-tray,
+    peak-hold,
+    sample-rate,
+    latency,
+    master-bus,
+    restart-engine,
+    start-engine,
+    get-usbip,
+    open-config-folder,
+}
+
+export struct SettingsState {
+    // Sign-in start can be registered on this platform.
+    autostart-supported: bool,
+    app-autostart: bool,
+    engine-autostart: bool,
+    // The sign-in registration is being read or changed.
+    autostart-busy: bool,
+    // The close button can hide the window into the tray.
+    has-tray: bool,
+    close-to-tray: bool,
+    peak-hold: bool,
+    // 0 = 44.1 kHz, 1 = 48 kHz, -1 = something else (set in the file).
+    sample-rate-index: int,
+    rate-detail: string,
+    // 0 low latency, 1 balanced, 2 max stability.
+    latency-index: int,
+    master-options: [string],
+    master-text: string,
+    restart-required: bool,
+    config-path: string,
+    virtual-available: bool,
+    virtual-note: string,
+    // Offer the usbip-win2 download (Windows without the driver).
+    usbip-link: bool,
+}
+
+// On/off switch.
+export component Switch inherits Rectangle {
+    in property <bool> on;
+    in property <string> a11y-label;
+    in property <bool> enabled: true;
+    callback toggled();
+    width: 42px;
+    height: 24px;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: root.on ? Theme.accent : (touch.has-hover && root.enabled ? Theme.text-dim : Theme.button-border);
+    background: root.on ? Theme.accent-fill : Theme.track;
+    opacity: root.enabled ? 1.0 : 0.45;
+    accessible-role: switch;
+    accessible-label: root.a11y-label;
+    accessible-checkable: true;
+    accessible-checked: root.on;
+    accessible-action-default => { if (root.enabled) { root.toggled(); } }
+    Rectangle {
+        x: root.on ? root.width - self.width - 4px : 4px;
+        y: (root.height - self.height) / 2;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: root.on ? Theme.knob : Theme.indicator-off;
+        animate x { duration: 120ms; easing: ease-out; }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.toggled(); }
+    }
+}
+
+// A choice between a few options shown side by side.
+export component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in property <int> selected;
+    in property <string> a11y-label;
+    callback activated(int);
+    height: 30px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.button-border;
+    background: Theme.track;
+    accessible-role: radio-group;
+    accessible-label: root.a11y-label;
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+        for option[i] in root.options: Rectangle {
+            border-radius: 6px;
+            border-width: i == root.selected ? 1px : 0px;
+            border-color: Theme.accent;
+            background: i == root.selected ? Theme.accent-bg : (ta.has-hover ? Theme.button-hover : transparent);
+            accessible-role: radio-button;
+            accessible-label: option;
+            accessible-checkable: true;
+            accessible-checked: i == root.selected;
+            accessible-action-default => { root.activated(i); }
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                Text {
+                    text: option;
+                    font-size: 12px;
+                    font-weight: i == root.selected ? 600 : 400;
+                    color: i == root.selected ? Theme.text : Theme.text-mid;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+            ta := TouchArea {
+                clicked => { root.activated(i); }
+            }
+        }
+    }
+}
+
+component Section inherits Rectangle {
+    in property <string> title;
+    border-radius: 10px;
+    background: Theme.section;
+    border-width: 1px;
+    border-color: Theme.section-border;
+    VerticalLayout {
+        padding: 14px;
+        padding-top: 12px;
+        spacing: 14px;
+        Text { text: root.title; font-size: 11px; font-weight: 600; color: Theme.text-dim; }
+        @children
+    }
+}
+
+// A setting: title and explanation on the left, its control on the right.
+component Row inherits HorizontalLayout {
+    in property <string> title;
+    in property <string> detail;
+    in property <color> detail-color: Theme.text-dim;
+    spacing: 20px;
+    VerticalLayout {
+        horizontal-stretch: 1;
+        alignment: center;
+        spacing: 3px;
+        Text { text: root.title; font-size: Theme.font; color: Theme.text; wrap: word-wrap; }
+        if root.detail != "": Text {
+            text: root.detail;
+            font-size: 12px;
+            color: root.detail-color;
+            wrap: word-wrap;
+        }
+    }
+    VerticalLayout {
+        horizontal-stretch: 0;
+        alignment: center;
+        @children
+    }
+}
+
+component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.section-border;
+}
+
+export component SettingsView inherits ScrollView {
+    in property <SettingsState> state;
+    in property <bool> connected;
+    callback changed(SettingKind, int);
+
+    VerticalLayout {
+        padding-bottom: 4px;
+        HorizontalLayout {
+            Rectangle { horizontal-stretch: 1; }
+            VerticalLayout {
+                horizontal-stretch: 100;
+                max-width: 860px;
+                spacing: 12px;
+
+                if root.state.autostart-supported: Section {
+                    title: "STARTUP";
+                    Row {
+                        title: "Open MixerCraft when you sign in";
+                        detail: "Starts hidden in the tray and starts the audio engine.";
+                        Switch {
+                            on: root.state.app-autostart;
+                            enabled: !root.state.autostart-busy;
+                            a11y-label: "Open MixerCraft when you sign in";
+                            toggled => { root.changed(SettingKind.app-autostart, root.state.app-autostart ? 0 : 1); }
+                        }
+                    }
+                    Divider { }
+                    Row {
+                        title: "Start only the audio engine when you sign in";
+                        detail: "Audio starts as early as possible, without the window. Not needed if MixerCraft opens at sign-in.";
+                        Switch {
+                            on: root.state.engine-autostart;
+                            enabled: !root.state.autostart-busy;
+                            a11y-label: "Start only the audio engine when you sign in";
+                            toggled => { root.changed(SettingKind.engine-autostart, root.state.engine-autostart ? 0 : 1); }
+                        }
+                    }
+                }
+
+                Section {
+                    title: "WINDOW";
+                    if root.state.has-tray: Row {
+                        title: "Close button";
+                        detail: "Audio keeps running either way; the engine is a separate program.";
+                        Segmented {
+                            options: ["Hide to tray", "Quit the app"];
+                            selected: root.state.close-to-tray ? 0 : 1;
+                            a11y-label: "Close button";
+                            activated(i) => { root.changed(SettingKind.close-to-tray, i == 0 ? 1 : 0); }
+                        }
+                    }
+                    if root.state.has-tray: Divider { }
+                    Row {
+                        title: "Peak hold";
+                        detail: "Meters keep a marker at the latest peak for 1.5 seconds.";
+                        Switch {
+                            on: root.state.peak-hold;
+                            a11y-label: "Peak hold";
+                            toggled => { root.changed(SettingKind.peak-hold, root.state.peak-hold ? 0 : 1); }
+                        }
+                    }
+                }
+
+                Section {
+                    title: "AUDIO ENGINE";
+                    if !root.connected: Row {
+                        title: "The audio engine isn't running";
+                        detail: "Start it to change its settings.";
+                        PillButton { text: "Start engine"; active: true; clicked => { root.changed(SettingKind.start-engine, 0); } }
+                    }
+                    if root.connected && root.state.restart-required: Rectangle {
+                        border-radius: 8px;
+                        background: Theme.yellow-bg;
+                        border-width: 1px;
+                        border-color: Theme.yellow;
+                        HorizontalLayout {
+                            padding: 10px;
+                            padding-left: 12px;
+                            spacing: 12px;
+                            Text {
+                                text: "Restart the engine to apply the changed settings. Audio pauses for a moment.";
+                                color: Theme.text;
+                                wrap: word-wrap;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                PillButton { text: "Restart engine"; active: true; clicked => { root.changed(SettingKind.restart-engine, 0); } }
+                            }
+                        }
+                    }
+                    if root.connected: Row {
+                        title: "Sample rate";
+                        detail: root.state.rate-detail;
+                        Segmented {
+                            options: ["44.1 kHz", "48 kHz"];
+                            selected: root.state.sample-rate-index;
+                            a11y-label: "Sample rate";
+                            activated(i) => { root.changed(SettingKind.sample-rate, i); }
+                        }
+                    }
+                    if root.connected: Divider { }
+                    if root.connected: Row {
+                        title: "Latency";
+                        detail: root.state.latency-index == 0 ? "Small buffers (about 6 ms per device). May crackle on busy systems."
+                            : root.state.latency-index == 2 ? "Large buffers (about 40 ms per device) for heavily loaded or unusual systems."
+                            : "About 15 ms per device. Glitch-free on typical systems.";
+                        Segmented {
+                            options: ["Low latency", "Balanced", "Max stability"];
+                            selected: root.state.latency-index;
+                            a11y-label: "Latency";
+                            activated(i) => { root.changed(SettingKind.latency, i); }
+                        }
+                    }
+                    if root.connected: Divider { }
+                    if root.connected: Row {
+                        title: "Clock";
+                        detail: "The bus whose output device paces the engine. Other devices follow it with drift correction.";
+                        DeviceSelect {
+                            width: 240px;
+                            text: root.state.master-text;
+                            options: root.state.master-options;
+                            a11y-label: "Clock bus";
+                            selected(i) => { root.changed(SettingKind.master-bus, i); }
+                        }
+                    }
+                    if root.connected && !root.state.restart-required: Divider { }
+                    if root.connected && !root.state.restart-required: Row {
+                        title: "Restart engine";
+                        detail: "Stops and starts the audio engine. Audio pauses for a moment.";
+                        PillButton { text: "Restart"; clicked => { root.changed(SettingKind.restart-engine, 0); } }
+                    }
+                    if root.connected && root.state.config-path != "": Divider { }
+                    if root.connected && root.state.config-path != "": Row {
+                        title: "Configuration file";
+                        detail: root.state.config-path;
+                        PillButton { text: "Show folder"; clicked => { root.changed(SettingKind.open-config-folder, 0); } }
+                    }
+                }
+
+                Section {
+                    title: "VIRTUAL DEVICES";
+                    Row {
+                        title: root.state.virtual-available ? "Available" : "Not available";
+                        detail: root.state.virtual-available
+                            ? "Choose “New virtual playback device” on an input or “New virtual recording device” on an output to create one."
+                            : root.state.virtual-note;
+                        detail-color: root.state.virtual-available ? Theme.text-dim : Theme.yellow;
+                        if root.state.usbip-link: PillButton {
+                            text: "Get usbip-win2";
+                            active: true;
+                            clicked => { root.changed(SettingKind.get-usbip, 0); }
+                        }
+                    }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+}

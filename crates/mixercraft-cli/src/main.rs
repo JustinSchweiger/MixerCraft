@@ -363,9 +363,9 @@ fn autostart(action: &AutostartCmd) -> anyhow::Result<()> {
                 args.push("--config".to_owned());
                 args.push(strip_verbatim(&config));
             }
-            let spec = AutostartSpec { engine: strip_verbatim(&engine).into(), args };
+            let spec = AutostartSpec { program: strip_verbatim(&engine).into(), args };
             autostart::enable(&spec, *now)?;
-            println!("autostart enabled: {}", spec.engine.display());
+            println!("autostart enabled: {}", spec.program.display());
             if *now {
                 println!("engine started");
             }
