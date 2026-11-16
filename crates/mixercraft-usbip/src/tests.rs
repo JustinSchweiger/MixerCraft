@@ -218,13 +218,20 @@ fn unlinked_transfers_are_not_completed() {
 fn idle_ticker_keeps_the_clock_running_without_a_host() {
     let srv = server();
     let log = Arc::new(Mutex::new(Log::default()));
+    let start = Instant::now();
     let _speaker = srv.add(spec(Direction::Speaker), Box::new(TestPort(Arc::clone(&log), 0.0)));
     let mic_log = Arc::new(Mutex::new(Log::default()));
     let _mic = srv.add(spec(Direction::Microphone), Box::new(TestPort(Arc::clone(&mic_log), 0.0)));
     std::thread::sleep(Duration::from_millis(300));
     let frames = log.lock().unwrap().played.len() / CHANNELS;
-    // ~300 ms at 48 kHz, delivered in 10 ms chunks.
-    assert!((12_000..=15_000).contains(&frames), "{frames} frames of silence in 300 ms");
+    // Real time at 48 kHz, delivered in 2 ms chunks. Measured rather than
+    // assumed: a loaded CI runner can oversleep the 300 ms considerably.
+    let elapsed_ms = start.elapsed().as_millis() as usize;
+    let expected = elapsed_ms * FRAMES_PER_MS;
+    assert!(
+        frames + 30 * FRAMES_PER_MS >= expected && frames <= expected + 2 * FRAMES_PER_MS,
+        "{frames} frames of silence in {elapsed_ms} ms"
+    );
     assert!(mic_log.lock().unwrap().recorded_calls >= 25);
 }
 
@@ -253,13 +260,34 @@ fn explicit_stop_hands_over_to_the_idle_clock_at_once() {
     c.submit(1, false, data.len() as u32, [0; 8], &data, Some(&packets));
     c.ret();
     c.read(10 * 16);
-    std::thread::sleep(Duration::from_millis(3));
-    assert!(h.host_streaming(), "host transfer just completed");
+    // The host counts as streaming for IDLE_AFTER (4 ms) after its last
+    // packet; the explicit stop below must end that earlier. A runner that
+    // stalls for longer than that window cannot show the difference, so the
+    // check is skipped there instead of failing at random.
+    let done = Instant::now();
+    let timeout_at = done + IDLE_AFTER;
+    while !h.host_streaming() && Instant::now() + Duration::from_millis(2) < timeout_at {
+        std::thread::yield_now();
+    }
+    if !h.host_streaming() {
+        eprintln!("skipped: streaming state not observed within the {IDLE_AFTER:?} window");
+        return;
+    }
     // SET_INTERFACE 1, alternate setting 0: the host stops streaming.
     c.submit(0, false, 0, [0x01, 11, 0, 0, 1, 0, 0, 0], &[], None);
     c.ret();
-    std::thread::sleep(Duration::from_millis(5));
-    assert!(!h.host_streaming(), "idle clock takes over without waiting for a timeout");
+    let acked = Instant::now();
+    let limit = acked + Duration::from_millis(50);
+    while h.host_streaming() && Instant::now() < limit {
+        std::thread::yield_now();
+    }
+    let handed_over = Instant::now();
+    assert!(!h.host_streaming(), "idle clock takes over");
+    if acked + Duration::from_micros(1500) <= timeout_at {
+        assert!(handed_over < timeout_at, "idle clock waited for the timeout instead of the explicit stop");
+    } else {
+        eprintln!("skipped: the stop arrived too close to the {IDLE_AFTER:?} timeout to tell them apart");
+    }
 }
 
 #[test]

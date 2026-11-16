@@ -7,8 +7,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
-- Linux and macOS builds: an unused constant in `mixercraft-winaudio` failed
-  CI (`-D warnings`).
+- Linux and macOS CI: Windows-only code (`mixercraft-winaudio`'s role list,
+  the tray's "stop engine" command) failed the `-D warnings` builds; two
+  virtual-device timing tests assumed exact sleep times and failed on busy
+  macOS runners (they now measure elapsed time, and skip the 4 ms handover
+  check only when the machine stalls past that window).
 
 ## [0.1.0] - 2026-11-16
 
