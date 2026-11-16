@@ -1,6 +1,7 @@
 # 0007 — Windows virtual endpoints and driver signing
 
-**Status:** Proposed — owner preference: zero recurring cost
+**Status:** Proposed — owner preference: zero recurring cost. USB/IP route
+spiked successfully on 2026-11-16 (see results below).
 
 ## Context
 Windows has no user-mode API that creates playback/recording endpoints
@@ -41,6 +42,50 @@ trigger SmartScreen warnings.
    owner decides the cost is acceptable.
 
 Users are never asked to enable test signing or disable Secure Boot.
+
+## USB/IP spike results (2026-11-16)
+
+Prototype: `spikes/usbip-audio/` — a user-space USB/IP server (Rust, no
+kernel code) emulating a full-speed USB Audio Class 1 device (48 kHz,
+16-bit stereo, isochronous OUT "speaker" + IN "microphone", looped back like
+a cable), attached through usbip-win2 0.9.8.1 (Microsoft-signed, hardware
+certification report) on Windows 11 Pro 26300.
+
+What works (verified on hardware):
+* Windows' inbox `usbaudio.sys` enumerates it and creates two ordinary
+  endpoints, "Lautsprecher (MixerCraft Virtual Cable)" and
+  "Mikrofon (MixerCraft Virtual Cable)". Apps open them in shared mode at
+  48 kHz with 10 ms periods.
+* Audio is bit-transparent through the cable: 59 of 60 clicks came back
+  (the first was played before recording started), level 0.74 for 0.8 sent
+  (Windows' capture path), no loopback underruns.
+* The emulator is the clock: it completes URBs in real time (10 packets of
+  1 ms per URB). Completion lateness averaged 0.25–0.3 ms, at most 2.7 ms.
+* **App-to-app latency 63.8–66.6 ms (mean 65.2 ms)**, very stable. Most of
+  it is Windows queuing 10 ms URBs plus the two 10 ms shared-mode buffers;
+  this is higher than VB-Audio's kernel cables (typically 10–30 ms), fine
+  for streaming, recording and voice chat, too high for live monitoring.
+* `usbip detach` removes the endpoints cleanly.
+
+Problems found:
+* **Windows made the new device the default output and default input on
+  every attach.** Detaching restored the previous defaults. A product needs
+  to restore the user's defaults after attaching (undocumented
+  `IPolicyConfig`, as for per-application routing) or tell the user.
+* usbip-win2 must be installed by the user (admin, restarts all USB 3 hubs,
+  so other USB audio drops out briefly) and is a third-party kernel driver
+  at version 0.9.x whose release notes warn of BSOD regressions in some
+  builds. MixerCraft would depend on its signed releases.
+* Not yet tested: several cables at once (one emulated device per cable,
+  busids `1-1`, `1-2`, …), sleep/resume, reattach after reboot (usbip-win2
+  has persistent reattachment), long soak, CPU cost, UAC2/high-speed for
+  lower latency, and whether Windows still picks it as default after the
+  first attach.
+
+Assessment: the route is technically viable at zero cost for "virtual
+cable" use cases with ~65 ms latency. Next: integrate the emulator into
+`mixercraftd` (paced by the engine clock, one device per virtual strip/bus),
+handle the default-device takeover, then soak-test.
 
 ## Sources
 * Microsoft: https://learn.microsoft.com/en-us/windows-hardware/drivers/dashboard/code-signing-reqs

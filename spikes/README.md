@@ -30,3 +30,21 @@ It measures, per prototype and mode: CPU (average over 20 s, in % of one
 core), private and working-set memory, time to first frame, a window
 screenshot and the UI Automation tree (what Narrator and other screen
 readers see).
+
+## Virtual cable over USB/IP (ADR 0007)
+
+`usbip-audio/` emulates a USB Audio Class 1 device (48 kHz 16-bit stereo,
+speaker + microphone looped back) as a user-space USB/IP server, for the
+Microsoft-signed usbip-win2 client driver. Results are in ADR 0007.
+
+```bash
+cd spikes/usbip-audio && cargo build --release
+target/release/usbip-audio-spike serve            # or: serve --sine
+python -I selftest.py                              # protocol check, no driver needed
+"C:/Program Files/USBip/usbip.exe" attach -r 127.0.0.1 -b 1-1
+target/release/usbip-audio-spike latency --out "MixerCraft Virtual Cable" --in "MixerCraft Virtual Cable" --secs 30
+"C:/Program Files/USBip/usbip.exe" detach -a
+```
+
+Attaching makes Windows switch the default output and input to the virtual
+cable; detach restores them.
