@@ -37,11 +37,12 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 
 ## Known limitations found in testing
 
-* **FIFO latency only ever grows.** After a stall, the catch-up burst becomes
-  the "largest writer block" and a genuine underrun raises the target by
-  50 %; nothing lowers it again. Planned fix: decaying maximum for observed
-  block sizes and a slow target reduction after a long glitch-free period
-  (e.g. 10 minutes), bounded by the profile minimum.
+* ~~**FIFO latency only ever grows.**~~ Fixed: writer block sizes use a
+  30–60 s sliding maximum, and after 5 glitch-free minutes the target
+  shrinks by 1 ms every 5 s (≈ 200 ppm correction) down to the configured
+  target or the largest block requirement of the quiet period. A first
+  hardware run exposed a shrink/raise oscillation on an output whose master
+  occasionally delivers double periods; the quiet-period floor fixes it.
 * **Drift ripple after re-priming.** The controller keeps its learned ratio
   but the fill jumps; transient corrections up to ~90 ppm were observed
   right after an underrun, settling within the loop time constant.

@@ -24,7 +24,9 @@
 //!   [`BLOCK_WINDOW_SECONDS`]–2×[`BLOCK_WINDOW_SECONDS`] plus the reader
 //!   block, so the safety margin follows what the devices actually do rather
 //!   than what they were configured to do — and a one-off catch-up burst
-//!   after a stall is forgotten again;
+//!   after a stall is forgotten again. Such a raise does not interrupt audio
+//!   unless the current fill could not even cover one writer block; the
+//!   drift controller raises the fill smoothly instead;
 //! * **latency recovery** – after [`SHRINK_AFTER_SECONDS`] without any
 //!   underrun, overrun or target increase, the target steps back down by
 //!   1 ms every [`SHRINK_INTERVAL_SECONDS`] until it reaches the larger of
@@ -273,19 +275,24 @@ impl FifoReader {
         let recent_write = self.track_writer_blocks(frames as u64);
         let read_w = (frames as f64 * self.to_writer_frames).ceil() as usize;
         let need = recent_write + read_w;
+        let ring = self.consumer.slots() / ch;
+        let total = ring as f64 + self.resampler.buffered_frames();
+        self.stats.fill_frames.store(total as u32, Ordering::Relaxed);
         if !warming_up {
             if need > self.target && self.target < self.max_target {
                 self.set_target(need.min(self.max_target));
-                self.primed = false; // re-prime once to the new margin
                 self.reset_quiet();
+                // Re-priming inserts silence, so only do it when the current
+                // fill cannot even ride out one writer gap. Otherwise the
+                // drift controller raises the fill to the new target
+                // smoothly.
+                if self.primed && total < recent_write as f64 {
+                    self.primed = false;
+                }
             } else {
                 self.recover_latency(frames as u64, read_w);
             }
         }
-
-        let ring = self.consumer.slots() / ch;
-        let total = ring as f64 + self.resampler.buffered_frames();
-        self.stats.fill_frames.store(total as u32, Ordering::Relaxed);
 
         if !self.primed {
             if ring < self.target {
@@ -623,6 +630,44 @@ mod tests {
         }
         assert_eq!(r.target_frames(), 1440, "needs one double block plus one read");
         assert_eq!(primings_after_settle, 0, "no re-prime gaps from oscillation");
+        assert_eq!(r.stats().snapshot().underruns, 0);
+    }
+
+    /// Also found on hardware: double periods rarer than the quiet period.
+    /// Recovery may then shrink below their requirement; when one arrives
+    /// the target goes back up, but the audio must not be interrupted —
+    /// the fill still covers the block.
+    #[test]
+    fn rare_large_blocks_raise_target_without_dropouts() {
+        let mut spec = FifoSpec::new(1, 48_000, 48_000, 15.0);
+        spec.quality = Quality::Fast;
+        let (mut w, mut r) = fifo(spec);
+        let small = vec![0.1f32; 480];
+        let large = vec![0.1f32; 960];
+        let mut out = vec![0.0f32; 480];
+        // Double blocks at 30 s, then 7 and 14 minutes later.
+        let large_at = [3_000, 45_000, 87_000];
+        let mut not_ok_after_settle = 0;
+        let mut i = 0;
+        let mut raised_back = false;
+        while i < 20 * 60 * 100 {
+            if large_at.contains(&i) {
+                if i > 3_000 && r.target_frames() < 1440 {
+                    raised_back = true;
+                }
+                w.write(&large);
+                r.read(&mut out);
+                i += 1;
+            } else {
+                w.write(&small);
+            }
+            if r.read(&mut out) != ReadOutcome::Ok && i > 3_500 {
+                not_ok_after_settle += 1;
+            }
+            i += 1;
+        }
+        assert!(raised_back, "scenario must exercise a shrink below the rare requirement");
+        assert_eq!(not_ok_after_settle, 0, "raises must not re-prime (no dropouts)");
         assert_eq!(r.stats().snapshot().underruns, 0);
     }
 
