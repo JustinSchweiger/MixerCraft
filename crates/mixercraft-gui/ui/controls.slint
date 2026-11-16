@@ -120,9 +120,13 @@ export component IndicatorButton inherits Rectangle {
     in property <color> on-bg: Theme.accent-bg;
     // Full name for screen readers, e.g. "Mic mute" (defaults to the text).
     in property <string> a11y-label: root.text;
+    // Shown faded (the feature is unavailable); clicks still arrive so the
+    // app can explain why.
+    in property <bool> dimmed: false;
     callback clicked();
     height: 26px;
     min-width: 50px;
+    opacity: root.dimmed ? 0.45 : 1.0;
     border-radius: 7px;
     border-width: 1px;
     border-color: root.on ? root.on-color : (touch.has-hover ? Theme.text-dim : Theme.button-border);

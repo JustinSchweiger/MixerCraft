@@ -1,0 +1,21 @@
+[package]
+name = "mixercraft-denoise"
+description = "Speech denoising (RNNoise) for MixerCraft: vendored nnnoiseless 0.5.2 with allocation-free FFTs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+# Vendored from nnnoiseless; keeps its license (see COPYING).
+license = "BSD-3-Clause"
+repository.workspace = true
+authors = ["Joe Neeman and the RNNoise authors (see AUTHORS)", "MixerCraft contributors"]
+publish = false
+
+[dependencies]
+realfft = "3.4"
+
+[dev-dependencies]
+nnnoiseless = { workspace = true }
+assert_no_alloc = { version = "1.1.2", default-features = false }
+
+[lints]
+workspace = true

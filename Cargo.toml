@@ -6,6 +6,7 @@ members = [
     "crates/mixercraft-ipc",
     "crates/mixercraft-usbip",
     "crates/mixercraft-winaudio",
+    "crates/mixercraft-denoise",
     "crates/mixercraft-platform",
     "crates/mixercraft-engine",
     "crates/mixercraft-cli",
@@ -29,6 +30,7 @@ mixercraft-ipc = { path = "crates/mixercraft-ipc" }
 mixercraft-platform = { path = "crates/mixercraft-platform" }
 mixercraft-usbip = { path = "crates/mixercraft-usbip" }
 mixercraft-winaudio = { path = "crates/mixercraft-winaudio" }
+mixercraft-denoise = { path = "crates/mixercraft-denoise" }
 
 anyhow = "1.0.100"
 ctrlc = "3.4"
@@ -37,6 +39,7 @@ cpal = "0.18.2"
 directories = "6.0.0"
 interprocess = "2.2"
 rtrb = "0.4.1"
+nnnoiseless = { version = "0.5.2", default-features = false }
 slint = { version = "~1.19.0", default-features = false, features = ["std", "backend-winit", "renderer-software", "accessibility", "compat-1-2", "unstable-winit-030"] }
 slint-build = "1.19.0"
 tray-icon = "0.26.1"
@@ -69,4 +72,14 @@ panic = "unwind"
 # DSP code is unusably slow (and glitches) without optimisation; keep debug
 # builds of the real-time core optimised.
 [profile.dev.package.mixercraft-core]
+opt-level = 2
+
+# Noise suppression (RNNoise) is far too slow unoptimised for a debug engine.
+[profile.dev.package.mixercraft-denoise]
+opt-level = 2
+
+[profile.dev.package.realfft]
+opt-level = 2
+
+[profile.dev.package.rustfft]
 opt-level = 2

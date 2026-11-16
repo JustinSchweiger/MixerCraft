@@ -17,6 +17,8 @@ and runs the hardware-independent tests on all three platforms.
 | Device selection at runtime | ✅ GUI and CLI switching verified on hardware | ✅ same code, CI only | ✅ same code, CI only |
 | Add / rename / remove inputs and outputs at runtime | ✅ verified on hardware through the GUI | ✅ same code, CI only | ✅ same code, CI only |
 | Strip processing: gate, compressor, 3-band EQ | ✅ engine verified with test signals, GUI knobs verified | ✅ same code, CI only | ✅ same code, CI only |
+| Strip noise suppression (RNNoise, 48 kHz engine only) | ✅ verified on hardware through virtual devices (noise floor −30 dB, speech unchanged) | ✅ same code, CI only | ✅ same code, CI only |
+| Output keep-awake tone (auto-standby speakers) | 🟡 tone verified on the playback path (15 Hz, −45 dBFS, after 10 s); effect on real speakers depends on their detection threshold, not verified | ✅ same code, CI only | ✅ same code, CI only |
 | Metering | ✅ | ✅ | ✅ |
 | Persistent configuration with migrations | ✅ | ✅ | ✅ |
 | Automatic device recovery | ✅ reopen with backoff, stall watchdog | ✅ | ✅ |

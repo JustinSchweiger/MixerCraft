@@ -18,8 +18,10 @@ use std::sync::Arc;
 
 use crate::buffer::AudioBlock;
 use crate::channel_map::ChannelMap;
+use crate::denoise::Denoiser;
 use crate::dsp::{self, GainShape, SmoothedGain};
 use crate::fx::{FxParams, StripFx};
+use crate::keepawake::{KeepAwake, KeepAwakeParams};
 use crate::meter::MeterBank;
 use crate::{MAX_BUSES, MAX_CHANNELS};
 
@@ -57,13 +59,15 @@ pub struct BusSpec {
     pub gain_db: f32,
     /// Mute state.
     pub mute: bool,
+    /// Inaudible tone that keeps auto-standby speakers on.
+    pub keep_awake: KeepAwakeParams,
 }
 
 impl BusSpec {
     /// A stereo bus at unity gain.
     #[must_use]
     pub fn stereo() -> Self {
-        Self { channels: 2, gain_db: 0.0, mute: false }
+        Self { channels: 2, gain_db: 0.0, mute: false, keep_awake: KeepAwakeParams::default() }
     }
 }
 
@@ -117,8 +121,10 @@ pub enum MixerCommand {
     StripSolo { strip: u16, solo: bool },
     /// Connects or disconnects a strip from a bus.
     Route { strip: u16, bus: u16, enabled: bool },
-    /// Sets a strip's gate, EQ and compressor.
+    /// Sets a strip's noise suppression, gate, EQ and compressor.
     StripFx { strip: u16, params: FxParams },
+    /// Sets a bus's keep-awake tone.
+    BusKeepAwake { bus: u16, params: KeepAwakeParams },
     /// Sets a bus fader (dB).
     BusGain { bus: u16, db: f32 },
     /// Mutes or unmutes a bus.
@@ -141,6 +147,7 @@ struct Strip {
     mute: bool,
     solo: bool,
     fader: SmoothedGain,
+    denoise: Denoiser,
     fx: StripFx,
     routes: u64,
     sends: Vec<SmoothedGain>,
@@ -155,6 +162,7 @@ struct Bus {
     mute: bool,
     fader: SmoothedGain,
     meter: Arc<MeterBank>,
+    keep_awake: KeepAwake,
 }
 
 /// Shared handles to every meter of a mixer, for control-side readers.
@@ -210,6 +218,11 @@ impl Mixer {
                 mute: b.mute,
                 fader: SmoothedGain::new(bus_target(b.gain_db, b.mute), ramp),
                 meter: Arc::new(MeterBank::new(b.channels)),
+                keep_awake: {
+                    let mut k = KeepAwake::new(sample_rate);
+                    k.set_params(b.keep_awake);
+                    k
+                },
             })
             .collect();
         let strips = layout
@@ -223,6 +236,11 @@ impl Mixer {
                     mute: s.mute,
                     solo: s.solo,
                     fader: SmoothedGain::new(strip_target(s.gain_db, s.mute, s.solo, solo_active), ramp),
+                    denoise: {
+                        let mut d = Denoiser::new(s.channels, sample_rate);
+                        d.set_enabled(s.fx.noise_suppression);
+                        d
+                    },
                     fx: {
                         let mut fx = StripFx::new(sample_rate);
                         fx.set_params(s.fx);
@@ -343,7 +361,12 @@ impl Mixer {
                 s.sends[bus as usize].set_target(if enabled { 1.0 } else { 0.0 });
             }
             MixerCommand::StripFx { strip, params } => {
-                self.strip_mut(strip)?.fx.set_params(params);
+                let s = self.strip_mut(strip)?;
+                s.denoise.set_enabled(params.noise_suppression);
+                s.fx.set_params(params);
+            }
+            MixerCommand::BusKeepAwake { bus, params } => {
+                self.bus_mut(bus)?.keep_awake.set_params(params);
             }
             MixerCommand::BusGain { bus, db } => {
                 if db.is_nan() {
@@ -398,6 +421,7 @@ impl Mixer {
             for ch in 0..strip.input.channels() {
                 report.non_finite += dsp::sanitize(strip.input.channel_mut(ch));
             }
+            strip.denoise.process(&mut strip.input);
             strip.fx.process(&mut strip.input);
             let shape = strip.fader.render(ramp_fader);
             for ch in 0..strip.input.channels() {
@@ -425,6 +449,8 @@ impl Mixer {
                 report.over += dsp::count_over(samples);
             }
             bus.meter.publish(&bus.output);
+            // After the meter: the tone is not program audio.
+            bus.keep_awake.process(&mut bus.output);
         }
         report
     }

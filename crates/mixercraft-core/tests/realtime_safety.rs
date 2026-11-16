@@ -7,6 +7,7 @@ use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use mixercraft_core::engine::{Command, engine};
 use mixercraft_core::fifo::{FifoSpec, fifo};
 use mixercraft_core::fx::FxParams;
+use mixercraft_core::keepawake::KeepAwakeParams;
 use mixercraft_core::mixer::{BusSpec, Mixer, MixerCommand, MixerLayout, StripSpec};
 
 #[global_allocator]
@@ -23,13 +24,20 @@ fn engine_cycle_with_fifos_and_commands_does_not_allocate() {
                     comp_amount: 6.0,
                     eq_low_db: 3.0,
                     eq_mid_db: -2.0,
-                    eq_high_db: 4.0
+                    eq_high_db: 4.0,
+                    noise_suppression: true,
                 },
                 ..StripSpec::stereo()
             };
             4
         ],
-        buses: vec![BusSpec::stereo(); 2],
+        buses: vec![
+            BusSpec {
+                keep_awake: KeepAwakeParams { enabled: true, ..KeepAwakeParams::default() },
+                ..BusSpec::stereo()
+            },
+            BusSpec::stereo(),
+        ],
     };
     let mixer = Mixer::new(&layout, 1024, 48_000).unwrap();
     let (mut core, mut handle) = engine(mixer, 48_000, Some(0));
@@ -58,8 +66,15 @@ fn engine_cycle_with_fifos_and_commands_does_not_allocate() {
             let db = -(((i / 50) % 24) as f32);
             handle.send(Command::Mixer(MixerCommand::StripGain { strip: 0, db })).unwrap();
             handle.send(Command::Mixer(MixerCommand::Route { strip: 2, bus: 0, enabled: i % 100 == 0 })).unwrap();
-            let params = FxParams { eq_mid_db: (i % 7) as f32, comp_amount: (i % 11) as f32, ..FxParams::default() };
+            let params = FxParams {
+                eq_mid_db: (i % 7) as f32,
+                comp_amount: (i % 11) as f32,
+                noise_suppression: i % 100 == 0,
+                ..FxParams::default()
+            };
             handle.send(Command::Mixer(MixerCommand::StripFx { strip: 1, params })).unwrap();
+            let keep_awake = KeepAwakeParams { enabled: i % 200 != 0, level_db: -40.0, frequency_hz: 12.0 };
+            handle.send(Command::Mixer(MixerCommand::BusKeepAwake { bus: 1, params: keep_awake })).unwrap();
         }
         assert_no_alloc(|| {
             in_w.write(&input);
@@ -101,4 +116,49 @@ fn reshaping_the_mixer_does_not_allocate_on_the_audio_thread() {
     handle.collect_garbage();
     assert_eq!(handle.stats().snapshot().rt_deallocations, 0);
     drop(readers);
+}
+
+/// The mixer is built on one thread and run on another (as the engine does):
+/// noise suppression and the keep-awake tone must not allocate there either,
+/// including on their very first cycle.
+#[test]
+fn denoise_and_keep_awake_do_not_allocate_on_the_audio_thread() {
+    let layout = MixerLayout {
+        strips: vec![
+            StripSpec {
+                routes: 0b1,
+                fx: FxParams { noise_suppression: true, ..FxParams::default() },
+                ..StripSpec::stereo()
+            };
+            2
+        ],
+        buses: vec![BusSpec {
+            keep_awake: KeepAwakeParams { enabled: true, ..KeepAwakeParams::default() },
+            ..BusSpec::stereo()
+        }],
+    };
+    let mut mixer = Mixer::new(&layout, 1024, 48_000).unwrap();
+    std::thread::spawn(move || {
+        // 12 s of near-silence: the keep-awake tone starts after 10 s.
+        for k in 0..1200u32 {
+            for s in 0..2 {
+                let b = mixer.strip_input_mut(s);
+                b.set_frames(480);
+                for ch in 0..2 {
+                    b.channel_mut(ch).fill(if k % 50 == 0 { 1e-4 } else { 0.0 });
+                }
+            }
+            if k == 600 {
+                // Toggle mid-stream.
+                let off = FxParams::default();
+                mixer.apply(MixerCommand::StripFx { strip: 0, params: off }).unwrap();
+            }
+            assert_no_alloc(|| {
+                mixer.process(480);
+            });
+        }
+        assert!(mixer.bus_output(0).channel(0).iter().any(|s| *s != 0.0), "keep-awake tone is playing");
+    })
+    .join()
+    .unwrap();
 }

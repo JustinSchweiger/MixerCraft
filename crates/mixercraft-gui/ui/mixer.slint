@@ -11,8 +11,12 @@ export struct StripView {
     db-text: string,
     mute: bool,
     solo: bool,
+    // Strips only: noise suppression on.
+    denoise: bool,
     // Buses only: this bus clocks the engine and cannot be removed.
     master: bool,
+    // Buses only: keep-awake tone on.
+    keep-awake: bool,
     routes: [bool],
     // Processing knob positions, 0..1 (see src/fx_law.rs).
     gate: float,
@@ -198,6 +202,9 @@ export component InputStrip inherits StripFrame {
     callback route(int);
     // kind: 0 gate, 1 compressor, 2 low, 3 mid, 4 high; value 0..1.
     callback fx(int, float);
+    callback denoise();
+    // Noise suppression works at the engine's sample rate (48 kHz).
+    in property <bool> denoise-available: true;
     width: 164px;
     name: root.data.name;
     device: root.data.device;
@@ -277,6 +284,18 @@ export component InputStrip inherits StripFrame {
             changed(v) => { root.fx(4, v); }
         }
     }
+    HorizontalLayout {
+        vertical-stretch: 0;
+        IndicatorButton {
+            text: "Denoise";
+            horizontal-stretch: 1;
+            a11y-label: root.data.name + " noise suppression"
+                + (root.denoise-available ? "" : " (needs the engine at 48 kHz)");
+            on: root.data.denoise;
+            dimmed: !root.denoise-available;
+            clicked => { root.denoise(); }
+        }
+    }
     Rectangle { height: 1px; background: Theme.strip-border; vertical-stretch: 0; }
     HorizontalLayout {
         spacing: 6px;
@@ -333,6 +352,7 @@ export component BusStrip inherits StripFrame {
     in property <MeterView> meter;
     callback gain(float);
     callback mute();
+    callback keep-awake();
     width: 140px;
     kind: "output";
     removable: !root.data.master;
@@ -351,6 +371,16 @@ export component BusStrip inherits StripFrame {
             label: root.data.name + " fader";
             changed(p) => { root.gain(p); }
             context-menu => { root.edit(); }
+        }
+    }
+    HorizontalLayout {
+        vertical-stretch: 0;
+        IndicatorButton {
+            text: "Keep awake";
+            horizontal-stretch: 1;
+            a11y-label: root.data.name + " keep speakers awake (inaudible tone after 10 s of silence)";
+            on: root.data.keep-awake;
+            clicked => { root.keep-awake(); }
         }
     }
     HorizontalLayout {
@@ -406,6 +436,9 @@ export component MixerView inherits HorizontalLayout {
     callback strip-solo(int);
     callback strip-route(int, int);
     callback strip-fx(int, int, float);
+    callback strip-denoise(int);
+    callback bus-keep-awake(int);
+    in property <bool> denoise-available: true;
     callback strip-device(int, int);
     callback strip-rename(int, string);
     callback strip-remove(int);
@@ -430,6 +463,8 @@ export component MixerView inherits HorizontalLayout {
             solo => { root.strip-solo(i); }
             route(b) => { root.strip-route(i, b); }
             fx(kind, v) => { root.strip-fx(i, kind, v); }
+            denoise => { root.strip-denoise(i); }
+            denoise-available: root.denoise-available;
             device-selected(d) => { root.strip-device(i, d); }
             rename(n) => { root.strip-rename(i, n); }
             remove => { root.strip-remove(i); }
@@ -447,6 +482,7 @@ export component MixerView inherits HorizontalLayout {
             device-options: root.output-devices;
             gain(p) => { root.bus-gain(i, p); }
             mute => { root.bus-mute(i); }
+            keep-awake => { root.bus-keep-awake(i); }
             device-selected(d) => { root.bus-device(i, d); }
             rename(n) => { root.bus-rename(i, n); }
             remove => { root.bus-remove(i); }

@@ -33,6 +33,7 @@ use mixercraft_config::{BusConfig, Config, DeviceRef, FxConfig, Sink, Source, St
 use mixercraft_core::engine::{Command, EngineHandle, engine};
 use mixercraft_core::fifo::{FifoSpec, fifo};
 use mixercraft_core::fx::FxParams;
+use mixercraft_core::keepawake::KeepAwakeParams;
 use mixercraft_core::mixer::{BusSpec, Mixer, MixerCommand, MixerLayout, MixerMeters, StripSpec};
 use mixercraft_core::stats::FifoStats;
 use mixercraft_ipc::{
@@ -212,9 +213,18 @@ pub fn layout_from_config(config: &Config) -> MixerLayout {
         buses: config
             .buses
             .iter()
-            .map(|b| BusSpec { channels: usize::from(b.channels), gain_db: b.gain_db, mute: b.mute })
+            .map(|b| BusSpec {
+                channels: usize::from(b.channels),
+                gain_db: b.gain_db,
+                mute: b.mute,
+                keep_awake: keep_awake_params(&b.keep_awake),
+            })
             .collect(),
     }
+}
+
+fn keep_awake_params(k: &mixercraft_config::KeepAwakeConfig) -> KeepAwakeParams {
+    KeepAwakeParams { enabled: k.enabled, level_db: k.level_db, frequency_hz: k.frequency_hz }
 }
 
 fn fx_params(fx: &mixercraft_config::FxConfig) -> FxParams {
@@ -224,6 +234,7 @@ fn fx_params(fx: &mixercraft_config::FxConfig) -> FxParams {
         eq_low_db: fx.eq_low_db,
         eq_mid_db: fx.eq_mid_db,
         eq_high_db: fx.eq_high_db,
+        noise_suppression: fx.noise_suppression,
     }
 }
 
@@ -816,6 +827,7 @@ impl Supervisor {
             channels: 2,
             gain_db: 0.0,
             mute: false,
+            keep_awake: mixercraft_config::KeepAwakeConfig::default(),
         });
         let r = self.reshape(config, None, None);
         if matches!(r, Response::Ok) {
@@ -1062,6 +1074,7 @@ impl Supervisor {
                     eq_low_db: fx.eq_low_db,
                     eq_mid_db: fx.eq_mid_db,
                     eq_high_db: fx.eq_high_db,
+                    noise_suppression: fx.noise_suppression,
                 }
                 .sanitized();
                 s.fx = mixercraft_config::FxConfig {
@@ -1070,8 +1083,24 @@ impl Supervisor {
                     eq_low_db: p.eq_low_db,
                     eq_mid_db: p.eq_mid_db,
                     eq_high_db: p.eq_high_db,
+                    noise_suppression: p.noise_suppression,
                 };
                 MixerCommand::StripFx { strip, params: p }
+            }
+            Request::SetBusKeepAwake { bus, keep_awake } => {
+                let Some(b) = self.config.buses.get_mut(usize::from(bus)) else { return invalid("no such bus") };
+                let p = KeepAwakeParams {
+                    enabled: keep_awake.enabled,
+                    level_db: keep_awake.level_db,
+                    frequency_hz: keep_awake.frequency_hz,
+                }
+                .sanitized();
+                b.keep_awake = mixercraft_config::KeepAwakeConfig {
+                    enabled: p.enabled,
+                    level_db: p.level_db,
+                    frequency_hz: p.frequency_hz,
+                };
+                MixerCommand::BusKeepAwake { bus, params: p }
             }
         };
         match self.handle.send(Command::Mixer(cmd)) {
@@ -1186,6 +1215,7 @@ impl Supervisor {
                         eq_low_db: s.fx.eq_low_db,
                         eq_mid_db: s.fx.eq_mid_db,
                         eq_high_db: s.fx.eq_high_db,
+                        noise_suppression: s.fx.noise_suppression,
                     },
                     source_choice: match &s.source {
                         Source::None => DeviceChoice::None,
@@ -1201,6 +1231,11 @@ impl Supervisor {
                 .enumerate()
                 .map(|(i, b)| BusStatus {
                     master: self.config.master_bus_index() == Some(i),
+                    keep_awake: mixercraft_ipc::KeepAwake {
+                        enabled: b.keep_awake.enabled,
+                        level_db: b.keep_awake.level_db,
+                        frequency_hz: b.keep_awake.frequency_hz,
+                    },
                     id: b.id.clone(),
                     name: b.name.clone(),
                     sink: sink_label(&b.sink),
@@ -1218,6 +1253,7 @@ impl Supervisor {
             last_error: self.last_error.clone(),
             virtual_devices: self.audio.virtual_devices_available().is_ok(),
             virtual_devices_note: self.audio.virtual_devices_available().err().unwrap_or_default(),
+            noise_suppression_available: self.sample_rate == mixercraft_core::denoise::DENOISE_RATE,
         }
     }
 }
@@ -1267,12 +1303,14 @@ mod tests {
             channels: 1,
             gain_db: -3.0,
             mute: true,
+            keep_awake: mixercraft_config::KeepAwakeConfig { enabled: true, ..Default::default() },
         });
         c.strips[0].routes = vec!["B1".into(), "A1".into()];
         let l = layout_from_config(&c);
         assert_eq!(l.strips[0].routes, 0b11);
         assert_eq!(l.buses[1].channels, 1);
         assert!(l.buses[1].mute);
+        assert!(l.buses[1].keep_awake.enabled, "keep-awake reaches the mixer layout");
     }
 
     /// A supervisor with no devices configured (nothing is opened).

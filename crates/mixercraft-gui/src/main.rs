@@ -49,6 +49,8 @@ thread_local! {
     static LOCAL_EDITS: RefCell<HashMap<(bool, usize), Instant>> = RefCell::new(HashMap::new());
     /// What each entry of the input / output device pickers selects.
     static DEVICE_CHOICES: RefCell<(Vec<DeviceChoice>, Vec<DeviceChoice>)> = const { RefCell::new((Vec::new(), Vec::new())) };
+    /// Keep-awake settings of every bus from the last status.
+    static BUS_KEEP_AWAKE: RefCell<Vec<mixercraft_ipc::KeepAwake>> = const { RefCell::new(Vec::new()) };
     /// The last device list and whether the engine can create virtual
     /// devices (the pickers are rebuilt when either changes).
     static DEVICE_LIST: RefCell<(Vec<DeviceSummary>, bool)> = const { RefCell::new((Vec::new(), false)) };
@@ -199,11 +201,12 @@ fn with_fx(mut row: StripView, fx: &mixercraft_ipc::StripFx) -> StripView {
     row.low = k.low;
     row.mid = k.mid;
     row.high = k.high;
+    row.denoise = k.denoise;
     row
 }
 
 fn knobs_of(row: &StripView) -> fx_law::Knobs {
-    fx_law::Knobs { gate: row.gate, comp: row.comp, low: row.low, mid: row.mid, high: row.high }
+    fx_law::Knobs { gate: row.gate, comp: row.comp, low: row.low, mid: row.mid, high: row.high, denoise: row.denoise }
 }
 
 /// Replaces rows that changed, or the whole model if the shape changed.
@@ -227,6 +230,8 @@ fn sync_rows(current: ModelRc<StripView>, fresh: Vec<StripView>, bus: bool) -> O
             row.low = old.low;
             row.mid = old.mid;
             row.high = old.high;
+            row.denoise = old.denoise;
+            row.keep_awake = old.keep_awake;
             row.device = old.device.clone();
             row.name = old.name.clone();
         }
@@ -239,6 +244,7 @@ fn sync_rows(current: ModelRc<StripView>, fresh: Vec<StripView>, bus: bool) -> O
             || old.mute != row.mute
             || old.solo != row.solo
             || knobs_of(&old) != knobs_of(&row)
+            || old.keep_awake != row.keep_awake
             || !same_routes;
         if changed {
             model.set_row_data(i, row);
@@ -250,6 +256,10 @@ fn sync_rows(current: ModelRc<StripView>, fresh: Vec<StripView>, bus: bool) -> O
 fn apply_status(ui: &MainWindow, s: &EngineStatus) {
     ui.set_connected(true);
     apply_devices(ui, None, Some(s.virtual_devices));
+    if ui.get_denoise_available() != s.noise_suppression_available {
+        ui.set_denoise_available(s.noise_suppression_available);
+    }
+    BUS_KEEP_AWAKE.with(|k| *k.borrow_mut() = s.buses.iter().map(|b| b.keep_awake).collect());
 
     let bus_ids: Vec<SharedString> = s.buses.iter().map(|b| SharedString::from(b.id.as_str())).collect();
     let ids_changed = ui.get_bus_ids().iter().ne(bus_ids.iter().cloned());
@@ -276,6 +286,7 @@ fn apply_status(ui: &MainWindow, s: &EngineStatus) {
         .iter()
         .map(|b| StripView {
             master: b.master,
+            keep_awake: b.keep_awake.enabled,
             ..strip_view(&b.name, &choice_text(&b.sink_choice, false), b.gain_db, b.mute, false, Vec::new())
         })
         .collect();
@@ -532,6 +543,44 @@ fn main() -> Result<(), slint::PlatformError> {
         if let (Some(_), Some(k)) = (edited, knobs) {
             mark_edit(false, i as usize);
             let _ = t.send(Cmd::StripFx(i as u16, k.to_fx()));
+        }
+    });
+    let w = ui.as_weak();
+    let t = tx.clone();
+    ui.on_strip_denoise(move |i| {
+        let ui = w.unwrap();
+        if !ui.get_denoise_available() {
+            show_notice(&ui, "Noise suppression needs the engine to run at 48 kHz.".into());
+            return;
+        }
+        let mut knobs = None;
+        if edit_row(&ui.get_strips(), i as usize, |r| {
+            r.denoise = !r.denoise;
+            knobs = Some(knobs_of(r));
+        })
+        .is_some()
+            && let Some(k) = knobs
+        {
+            mark_edit(false, i as usize);
+            let _ = t.send(Cmd::StripFx(i as u16, k.to_fx()));
+        }
+    });
+    let w = ui.as_weak();
+    let t = tx.clone();
+    ui.on_bus_keep_awake(move |i| {
+        let ui = w.unwrap();
+        let mut enabled = false;
+        if edit_row(&ui.get_buses(), i as usize, |r| {
+            r.keep_awake = !r.keep_awake;
+            enabled = r.keep_awake;
+        })
+        .is_some()
+        {
+            mark_edit(true, i as usize);
+            // Keep a level or frequency set elsewhere (CLI, config file).
+            let mut keep_awake = BUS_KEEP_AWAKE.with(|k| k.borrow().get(i as usize).copied()).unwrap_or_default();
+            keep_awake.enabled = enabled;
+            let _ = t.send(Cmd::BusKeepAwake(i as u16, keep_awake));
         }
     });
     let w = ui.as_weak();

@@ -24,11 +24,13 @@
 
 pub mod buffer;
 pub mod channel_map;
+pub mod denoise;
 pub mod drift;
 pub mod dsp;
 pub mod engine;
 pub mod fifo;
 pub mod fx;
+pub mod keepawake;
 pub mod meter;
 pub mod mixer;
 pub mod resampler;
