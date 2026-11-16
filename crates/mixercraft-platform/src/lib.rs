@@ -197,7 +197,9 @@ impl OpenStream {
 pub struct AudioSystem {
     host: cpal::Host,
     /// Started on first use of a virtual device.
-    virtual_devices: OnceLock<Result<virtual_dev::Virtual, String>>,
+    virtual_devices: OnceLock<virtual_dev::Virtual>,
+    /// Why starting virtual devices failed last time (retried on next use).
+    virtual_error: std::sync::Mutex<Option<String>>,
 }
 
 impl std::fmt::Debug for AudioSystem {
@@ -212,9 +214,13 @@ impl AudioSystem {
     pub fn new() -> Self {
         #[cfg(all(target_os = "linux", feature = "pipewire"))]
         if let Ok(host) = cpal::host_from_id(cpal::HostId::PipeWire) {
-            return Self { host, virtual_devices: OnceLock::new() };
+            return Self { host, virtual_devices: OnceLock::new(), virtual_error: std::sync::Mutex::default() };
         }
-        Self { host: cpal::default_host(), virtual_devices: OnceLock::new() }
+        Self {
+            host: cpal::default_host(),
+            virtual_devices: OnceLock::new(),
+            virtual_error: std::sync::Mutex::default(),
+        }
     }
 
     /// Whether virtual devices can be created; `Err` explains why not.
@@ -222,18 +228,44 @@ impl AudioSystem {
     /// # Errors
     /// The reason virtual devices are unavailable.
     pub fn virtual_devices_available(&self) -> Result<(), String> {
-        match self.virtual_devices.get() {
-            Some(Err(e)) => Err(e.clone()),
-            Some(Ok(_)) => Ok(()),
-            None => virtual_dev::unavailable_reason().map_or(Ok(()), |why| Err(why.into())),
+        if self.virtual_devices.get().is_some() {
+            return Ok(());
+        }
+        if let Some(why) = virtual_dev::unavailable_reason() {
+            return Err(why.into());
+        }
+        match self.virtual_error.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
+            Some(e) => Err(e.clone()),
+            None => Ok(()),
         }
     }
 
+    /// Starts virtual devices on first use. A failure (e.g. the USB/IP port
+    /// is taken) is retried on the next use instead of being remembered.
     fn virtual_system(&self, name: &str) -> Result<&virtual_dev::Virtual, PlatformError> {
-        self.virtual_devices
-            .get_or_init(virtual_dev::Virtual::start)
-            .as_ref()
-            .map_err(|why| virtual_dev::unavailable(name, why))
+        if let Some(v) = self.virtual_devices.get() {
+            return Ok(v);
+        }
+        let mut error = self.virtual_error.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        match virtual_dev::Virtual::start() {
+            Ok(v) => {
+                *error = None;
+                Ok(self.virtual_devices.get_or_init(|| v))
+            }
+            Err(why) => {
+                let e = virtual_dev::unavailable(name, &why);
+                *error = Some(why);
+                Err(e)
+            }
+        }
+    }
+
+    /// Sets the name Windows shows for the virtual device of a strip
+    /// (`speaker`) or bus. Does nothing if virtual devices are not running.
+    pub fn set_virtual_label(&self, sel: &DeviceSelector, speaker: bool, label: &str) {
+        if let (Some(name), Some(v)) = (virtual_dev::virtual_name(sel), self.virtual_devices.get()) {
+            v.set_label(name, speaker, label);
+        }
     }
 
     /// Name of the active backend (e.g. "WASAPI").

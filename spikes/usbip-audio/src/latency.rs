@@ -25,7 +25,8 @@ pub fn list() {
             (false, true) => "out",
             _ => "?",
         };
-        println!("{dir:6}  {}", name(&d));
+        let id = d.id().map(|i| i.to_string()).unwrap_or_default();
+        println!("{dir:6}  {}  [{id}]", name(&d));
     }
 }
 

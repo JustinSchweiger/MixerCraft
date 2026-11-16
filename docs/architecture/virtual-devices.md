@@ -48,6 +48,21 @@ Chosen because it costs nothing and needs no kernel code of our own
   the restore check was tightened from 250 to 50 ms).
 * MixerCraft's own endpoints are hidden from the device list, so nothing can
   be routed back into itself.
+* Identity and names: the USB serial number is derived from the name in the
+  id (`virtual:Input 2`; recording devices use a separate serial), so Windows
+  sees the same device after every engine start and keeps its endpoint id,
+  app assignments and default-device choice (endpoint ids verified stable
+  over restarts). Windows keeps the product name it first saw; what users
+  see follows the strip or bus name instead, through the endpoint's own name
+  ("Browser (MixerCraft Input 2)"), set like a rename in the Sound settings
+  (`mixercraft-winaudio::set_description`, applied on open, on rename and
+  every 2 s). The `IPolicyConfig` call takes ownership of the string; passing
+  a Rust-owned buffer corrupted the heap (found on hardware, fixed).
+* The devices exist only while the engine runs; configuration (strips,
+  buses, ids, routing) persists in `config.toml` as usual.
+* The default-device guard only undoes a switch to an endpoint that did not
+  exist before the attach; switches to known endpoints are the user's own
+  default returning and are left alone.
 * Limitations: about 95 ms from an application through MixerCraft to another
   application (USB transfers are queued in 10 ms chunks on both sides); the
   pid.codes *test* product id is used until the project has its own; the

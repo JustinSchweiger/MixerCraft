@@ -12,6 +12,15 @@ All notable changes to this project are documented here. The format follows
   automatically.
 
 ### Fixed
+- The default-device guard only undoes Windows switching to a newly
+  appeared virtual device; it no longer overrides a virtual device the user
+  chose as default when that device returns after an engine restart.
+- Virtual recording devices get their own USB serial numbers (a playback
+  and a recording device of the same name no longer collide).
+- If the virtual-device server cannot start (USB/IP port in use), the next
+  attempt retries instead of the engine remembering the failure.
+- `usbip attach` runs with `--once`, so the driver makes no background
+  reattach attempts that could race the engine's own recovery.
 - A second engine start now reports "already running" instead of a Windows
   "access denied" error.
 - FIFO latency now recovers after stalls instead of staying raised forever;
@@ -30,6 +39,10 @@ All notable changes to this project are documented here. The format follows
   installs. Windows' default devices are restored after it switches to a new
   virtual device (`mixercraft-winaudio`). About 95 ms from one application
   through MixerCraft to another.
+- Virtual devices are named after their strip or bus in Windows (e.g.
+  "Browser (MixerCraft Input 2)") and follow renames within a second; the
+  device identity stays the same, so Windows keeps app assignments and
+  default-device choices across engine restarts.
 - Inputs and outputs can be added, renamed and removed while audio runs
   (GUI "+" cards and right-click menu; `mixercraft add-strip`, `add-bus`,
   `rename-strip`, `rename-bus`, `remove-strip`, `remove-bus`). The engine
