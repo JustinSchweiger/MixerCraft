@@ -69,7 +69,7 @@ systemd user unit on Linux, LaunchAgent on macOS):
 ```
 
 Release builds of `mixercraftd` on Windows run without a console window;
-engine logs are written to `%LOCALAPPDATA%\MixerCraft\logs` (Windows),
+engine logs are written to `%LOCALAPPDATA%\MixerCraft\data\logs` (Windows),
 `~/.local/share/mixercraft/logs` (Linux) or
 `~/Library/Application Support/MixerCraft/logs` (macOS).
 

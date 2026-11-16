@@ -100,7 +100,10 @@ fn follow_default() -> (Support, &'static str) {
 
 #[cfg(windows)]
 fn session_autostart() -> (Support, &'static str) {
-    (Support::Partial, "Task Scheduler logon task (`mixercraft autostart enable`); start at sign-in not yet verified")
+    (
+        Support::Partial,
+        "Task Scheduler logon task (`mixercraft autostart enable`); start at actual sign-in not yet verified",
+    )
 }
 #[cfg(target_os = "linux")]
 fn session_autostart() -> (Support, &'static str) {
