@@ -297,6 +297,9 @@ impl FifoReader {
         if !self.primed {
             if ring < self.target {
                 out.fill(0.0);
+                if !warming_up {
+                    self.stats.gap_reads.fetch_add(1, Ordering::Relaxed);
+                }
                 return ReadOutcome::Priming;
             }
             self.primed = true;
@@ -353,6 +356,7 @@ impl FifoReader {
                 return ReadOutcome::Priming;
             }
             self.stats.underruns.fetch_add(1, Ordering::Relaxed);
+            self.stats.gap_reads.fetch_add(1, Ordering::Relaxed);
             self.reset_quiet();
             // Adaptive latency: grow the safety margin by 50 %, bounded.
             self.set_target((self.target + self.target / 2).min(self.max_target));
@@ -669,6 +673,7 @@ mod tests {
         assert!(raised_back, "scenario must exercise a shrink below the rare requirement");
         assert_eq!(not_ok_after_settle, 0, "raises must not re-prime (no dropouts)");
         assert_eq!(r.stats().snapshot().underruns, 0);
+        assert_eq!(r.stats().snapshot().gap_reads, 0, "gap counter agrees");
     }
 
     #[test]

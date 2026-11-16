@@ -831,6 +831,7 @@ impl Supervisor {
                             underruns: f.underruns,
                             overruns: f.overruns,
                             dropped_frames: f.dropped_frames,
+                            gap_reads: f.gap_reads,
                             drift_ppm: f.drift_ppm,
                         }
                     }),
