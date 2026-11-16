@@ -1,0 +1,24 @@
+[package]
+name = "mixercraft-platform"
+description = "Platform audio integration for MixerCraft: device discovery, native streams and the capability model."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+cpal.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Native PipeWire host for cpal on Linux (needs libpipewire-0.3-dev and
+# libclang at build time). Without it, Linux uses ALSA, which on PipeWire
+# systems is served by pipewire-alsa.
+pipewire = ["cpal/pipewire"]
