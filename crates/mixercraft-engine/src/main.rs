@@ -37,7 +37,7 @@ const MAX_CLIENTS: usize = 8;
 #[command(name = "mixercraftd", version, about = "MixerCraft background audio engine")]
 struct Args {
     /// Configuration file (default: the per-user configuration directory).
-    #[arg(long)]
+    #[arg(long, env = "MIXERCRAFT_CONFIG")]
     config: Option<PathBuf>,
     /// Print the default configuration and exit.
     #[arg(long)]
@@ -49,7 +49,7 @@ struct Args {
     #[arg(long, default_value = "info", env = "MIXERCRAFT_LOG")]
     log: String,
     /// Directory for log files (default: the per-user data directory).
-    #[arg(long)]
+    #[arg(long, env = "MIXERCRAFT_LOG_DIR")]
     log_dir: Option<PathBuf>,
 }
 
