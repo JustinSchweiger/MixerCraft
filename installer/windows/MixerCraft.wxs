@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MixerCraft Windows installer (WiX Toolset 5, built by scripts/build-installer.ps1).
+
+  Per-user package: installs to %LOCALAPPDATA%\Programs\MixerCraft without
+  administrator rights, so the in-app updater can run it without a UAC prompt
+  (ADR 0006). Preprocessor variables passed by the build script:
+    Version  - MSI product version (from Cargo.toml)
+    BinDir   - folder with mixercraft-gui.exe, mixercraftd.exe, mixercraft.exe
+    IconFile - .ico for Apps & features
+    Marker   - installed-by-msi.txt (lets the app know it may update itself)
+
+  Never bundles or installs drivers: virtual devices need usbip-win2, which
+  the user installs separately (ADR 0007); the installer only explains this.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="MixerCraft"
+           Manufacturer="MixerCraft contributors"
+           Version="$(var.Version)"
+           UpgradeCode="651de6be-fe8a-4f71-abaf-425b451f9442"
+           Scope="perUser"
+           Compressed="yes"
+           Language="1033">
+    <SummaryInformation Description="MixerCraft audio mixer" />
+
+    <!-- Upgrades remove the old version first, so a rebuilt package of the
+         same version also replaces an installed one. -->
+    <MajorUpgrade Schedule="afterInstallInitialize"
+                  AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of MixerCraft is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="MixerCraftIcon" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="MixerCraftIcon" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/vadimgrn/usbip-win2/releases" />
+    <Property Id="ARPCOMMENTS" Value="Audio mixer and router. Virtual devices need usbip-win2." />
+
+    <!-- usbip-win2 (virtual devices) is detected like the engine does:
+         %ProgramFiles%\USBip\usbip.exe. -->
+    <Property Id="USBIPEXE">
+      <DirectorySearch Id="UsbipDir" Path="[ProgramFiles64Folder]USBip" Depth="0">
+        <FileSearch Id="UsbipExe" Name="usbip.exe" />
+      </DirectorySearch>
+    </Property>
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsDir" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="MixerCraft" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <StandardDirectory Id="DesktopFolder" />
+
+    <!-- Files. Per-user components use an HKCU key path (ICE38). -->
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Component Id="GuiExe" Guid="8035392c-8799-45d7-8e38-6784e4acf2bd">
+        <File Id="GuiExe" Source="$(var.BinDir)\mixercraft-gui.exe" KeyPath="no" />
+        <RegistryValue Root="HKCU" Key="Software\MixerCraft\Installer" Name="Gui" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+        <RemoveFolder Id="RemoveProgramsDir" Directory="ProgramsDir" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\MixerCraft\Installer" Name="InstallFolder" Type="string" Value="[INSTALLFOLDER]" />
+      </Component>
+      <Component Id="EngineExe" Guid="fe55a65d-15c5-44ac-8ad5-2bfe7c886349">
+        <File Id="EngineExe" Source="$(var.BinDir)\mixercraftd.exe" KeyPath="no" />
+        <RegistryValue Root="HKCU" Key="Software\MixerCraft\Installer" Name="Engine" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+      <Component Id="CliExe" Guid="672f1c84-2056-47c6-b9ac-192f0b7df0bf">
+        <File Id="CliExe" Source="$(var.BinDir)\mixercraft.exe" KeyPath="no" />
+        <RegistryValue Root="HKCU" Key="Software\MixerCraft\Installer" Name="Cli" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+      <Component Id="Marker" Guid="985d04da-2064-47a9-89e6-185b725ab316">
+        <File Id="Marker" Source="$(var.Marker)" Name="installed-by-msi.txt" KeyPath="no" />
+        <RegistryValue Root="HKCU" Key="Software\MixerCraft\Installer" Name="Marker" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder" Guid="d507b188-c161-4aa5-953d-30bd0ffa459c">
+      <Shortcut Id="StartMenuShortcut" Name="MixerCraft" Description="Audio mixer and router"
+                Target="[#GuiExe]" WorkingDirectory="INSTALLFOLDER" />
+      <RegistryValue Root="HKCU" Key="Software\MixerCraft\Installer" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Component Id="DesktopShortcut" Directory="DesktopFolder" Guid="a260839e-4029-4b27-89f3-e49d518c55ea">
+      <Shortcut Id="DesktopShortcut" Name="MixerCraft" Description="Audio mixer and router"
+                Target="[#GuiExe]" WorkingDirectory="INSTALLFOLDER" />
+      <RegistryValue Root="HKCU" Key="Software\MixerCraft\Installer" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <!-- Start with Windows: the tray app via the Run key; the engine via the
+         same Task Scheduler task as `mixercraft autostart enable` (custom
+         actions below), which starts earlier than the Run key. -->
+    <Component Id="AutostartGui" Directory="INSTALLFOLDER" Guid="242aa06d-840e-4ad4-9a27-316e8bed4a82">
+      <RegistryValue Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="MixerCraft"
+                     Type="string" Value="&quot;[#GuiExe]&quot; --tray" KeyPath="yes" />
+    </Component>
+
+    <!-- Windows Installer writes PATH as REG_EXPAND_SZ only if the value it
+         writes contains a %variable%; with a plain path it turned the user
+         PATH into REG_SZ, which breaks entries such as %USERPROFILE%\...
+         (seen on 2026-11-16). On removal the type follows the remaining
+         entries, which is harmless either way. -->
+    <Component Id="PathEntry" Directory="INSTALLFOLDER" Guid="4238a516-6d61-43b6-b929-07d9860f3bb3">
+      <Environment Id="PathEntry" Name="PATH" Value="%LOCALAPPDATA%\Programs\MixerCraft" Permanent="no" Part="last" Action="set" System="no" />
+      <RegistryValue Root="HKCU" Key="Software\MixerCraft\Installer" Name="Path" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Feature Id="Main" Title="MixerCraft" Level="1" AllowAbsent="no" AllowAdvertise="no" Display="expand"
+             Description="The mixer app, the audio engine (mixercraftd) and the command-line tool (mixercraft), plus a Start menu entry.">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <Feature Id="Autostart" Title="Start with Windows" Level="1" AllowAdvertise="no"
+               Description="Starts the audio engine and the tray icon when you sign in.">
+        <ComponentRef Id="AutostartGui" />
+      </Feature>
+      <Feature Id="Desktop" Title="Desktop shortcut" Level="1" AllowAdvertise="no"
+               Description="Puts a MixerCraft shortcut on the desktop.">
+        <ComponentRef Id="DesktopShortcut" />
+      </Feature>
+      <Feature Id="CliPath" Title="Command line on PATH" Level="1" AllowAdvertise="no"
+               Description="Adds the install folder to your PATH so `mixercraft` works in any new terminal.">
+        <ComponentRef Id="PathEntry" />
+      </Feature>
+    </Feature>
+
+    <!-- Close the app and stop the engine of this installation before files
+         are replaced or removed. Runs the installed mixercraft.exe (the old
+         version on an upgrade); an engine started from another folder is left
+         alone. -->
+    <SetProperty Id="WixQuietExecCmdLine" Value="&quot;[INSTALLFOLDER]mixercraft.exe&quot; close-app --timeout 20"
+                 Before="CloseMixerCraft" Sequence="execute" />
+    <CustomAction Id="CloseMixerCraft" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
+                  Execute="immediate" Return="ignore" />
+
+    <!-- Engine autostart task (Task Scheduler, no elevation). -->
+    <SetProperty Id="EnableEngineAutostart" Value="&quot;[INSTALLFOLDER]mixercraft.exe&quot; autostart enable"
+                 Before="EnableEngineAutostart" Sequence="execute" />
+    <CustomAction Id="EnableEngineAutostart" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="yes" Return="ignore" />
+    <!-- Removed only if it starts this installation's engine; the trailing
+         "\" keeps CommandLineToArgvW from reading \" as a quote. -->
+    <SetProperty Id="DisableEngineAutostart"
+                 Value="&quot;[INSTALLFOLDER]mixercraft.exe&quot; autostart disable --if-under &quot;[INSTALLFOLDER]\&quot;"
+                 Before="DisableEngineAutostart" Sequence="execute" />
+    <CustomAction Id="DisableEngineAutostart" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="yes" Return="ignore" />
+
+    <!-- Start the app after an update (LAUNCHAPP=1, set by the in-app
+         updater) or when the user ticks the box on the last page. -->
+    <Property Id="WixShellExecTarget" Value="[#GuiExe]" />
+    <CustomAction Id="LaunchApp" BinaryRef="Wix4UtilCA_X64" DllEntry="WixShellExec" Impersonate="yes" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="CloseMixerCraft" Before="InstallValidate"
+              Condition="WIX_UPGRADE_DETECTED OR REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="DisableEngineAutostart" Before="RemoveFiles"
+              Condition="REMOVE~=&quot;ALL&quot; OR (&amp;Autostart=2 AND !Autostart=3)" />
+      <Custom Action="EnableEngineAutostart" After="InstallFiles"
+              Condition="&amp;Autostart=3 AND NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="LaunchApp" After="InstallFinalize"
+              Condition="LAUNCHAPP=1 AND NOT REMOVE~=&quot;ALL&quot;" />
+    </InstallExecuteSequence>
+
+    <!-- usbip-win2 notice on the last page. -->
+    <SetProperty Id="WIXUI_EXITDIALOGOPTIONALTEXT" Sequence="ui" After="AppSearch"
+                 Condition="NOT USBIPEXE AND NOT Installed"
+                 Value="Virtual devices (to route single apps) need the free usbip-win2 driver, which is not installed. MixerCraft works without it with your physical devices. Get it from github.com/vadimgrn/usbip-win2/releases" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Start MixerCraft" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+
+    <UI Id="MixerCraftUI">
+      <ui:WixUI Id="WixUI_FeatureTree" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApp"
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+    </UI>
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+  </Package>
+</Wix>

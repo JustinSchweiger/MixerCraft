@@ -12,8 +12,8 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 | 5 | Virtual devices | 🗓 blocked on Windows by driver signing ([ADR 0007](adr/0007-windows-driver-signing.md)); Linux and macOS can start |
 | 6 | Background engine and recovery | 🟡 done: IPC, single instance, recovery state machine, watchdog, software clock fallback, diagnostics, config persistence, latency recovery, per-user autostart (Windows verified except an actual sign-in), log files, console-less engine. Missing: device-arrival notifications, sleep/resume tests, Windows service mode for pre-login start |
 | 7 | Production GUI | 🟡 Slint mixer window connected to the engine (faders, mute/solo, routing, LED meters, gate/comp/EQ knobs, diagnostics, engine start), tray icon. Next: global hotkeys, settings |
-| 8 | Packaging and release pipeline | 🗓 ([ADR 0006](adr/0006-distribution-and-updates.md)) |
-| 9 | Automatic updates | 🗓 |
+| 8 | Packaging and release pipeline | 🟡 Windows per-user MSI and build script done and verified ([releasing](development/releasing.md), [ADR 0006](adr/0006-distribution-and-updates.md)). Missing: code signing (SignPath for OSS, now possible with the public repo), release workflow, macOS/Linux packages |
+| 9 | Automatic updates | 🟡 Windows: check/notify/download/SHA-256/install verified against a local feed. Missing: signed manifests (minisign), first real GitHub release, macOS/Linux installer targets |
 | 10 | Hardening: long soak tests, self-hosted hardware runners | 🗓 |
 
 ## Next steps, in order
@@ -30,6 +30,9 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 5. GUI: global hotkeys; Linux tray (KSNI); GUI autostart with `--tray`; settings tab.
 6. Native WASAPI backend for low latency.
 7. macOS HAL plug-in; Windows driver once signing is arranged.
+8. Releases: publish v0.1.0 on GitHub Releases (MSI, checksum,
+   `latest.json`); sign feed manifests (minisign) and apply to SignPath for
+   Authenticode; per-machine MSI once a service mode exists.
 
 ## Hardware test log
 
@@ -47,6 +50,7 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 | 2026-11-16 | same | virtual devices: naming and restarts | Endpoint ids of virtual devices identical across three engine restarts. Endpoint names follow strip names ("Browser (MixerCraft ReproB)") and a strip rename appeared in Windows after 0.3 s. A first implementation corrupted the heap on rename (0xC0000374, three crashes of test processes); after handing a COM-allocated string to IPolicyConfig: 10 renames and 3 engine restarts without a crash event. |
 | 2026-11-16 | same | stress test: master on the USB speakers with nothing routed; click test app → virtual "Game" → strip → bus → virtual "Chat" → app; 12 normal-priority busy loops for 20 s | Before (normal-priority threads): +2…13 gaps, +5…51 xruns, 26–46 of ~47 clicks, round trip avg 172–284 ms, up to 420 ms. After MMCSS for all audio threads and 1 ms packet pacing (4 runs): 0–3 gaps (one underrun on the virtual input per run, at stream start / load onset), 0–1 xruns, 40–47 clicks, avg 90–104 ms, max 154 ms. The recording app still saw Windows-side capture glitches on the virtual microphone in one run under this full load. |
 | 2026-11-16 | same | isolated test engine (virtual devices only, nothing audible) | Keep-awake, recorded by loopback from the virtual speaker it plays into: silent for ~10 s after being enabled, then a steady 15.0 Hz tone at -45.0 dBFS. Through a virtual *microphone* the tone was distorted by Windows capture processing (low cut, automatic gain), so capture endpoints are no measurement path. Noise suppression, speech-like bursts plus noise played into a strip and recorded by loopback: noise floor -39.2 → -69.6/-70.0 dBFS (two runs), speech -17.6 → -17.7 dBFS. Release build: cycle load 0.5–0.7 % → 1.3–1.9 % with one stereo strip denoised; engine process 3.4 % of one core. Another session was running a CPU stress test at the same time. |
+| 2026-11-16 | Windows 11 Pro 26300, x86_64, usbip-win2 0.9.8.1 installed | none (test engines ran a scratch config: muted bus on an absent device, software clock) | Installer: per-user MSI 0.1.0 installed without elevation (files, Start-menu and desktop shortcuts, `Run` entry with `--tray`, "MixerCraft Engine" task pointing at the installed engine, user PATH entry, usbip-win2 detected). Upgrade to 0.1.1 with the installed GUI and engine running: `close-app` closed both in < 0.5 s, no files-in-use prompt, configuration file unchanged. In-app update: the installed GUI found 9.9.9 on a local HTTP feed, showed "Update available", downloaded and verified the MSI, quit; the MSI left an engine running from another folder alone, upgraded and restarted the GUI. A tampered checksum was rejected and the download deleted. Uninstall removed files, shortcuts, `Run` entry, task, PATH entry and registry key; configuration kept. Found and fixed: Windows Installer had rewritten the user PATH as REG_SZ. |
 
 ## Known limitations found in testing
 

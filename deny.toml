@@ -36,6 +36,13 @@ allow = [
 ]
 confidence-threshold = 0.9
 
+# Mozilla's root certificate list as data, pulled in by the updater's
+# certificate verifier only for wasm32 (never in MixerCraft builds, which use
+# the operating system's certificate store). Permissive data license.
+[[licenses.exceptions]]
+crate = "webpki-root-certs"
+allow = ["CDLA-Permissive-2.0"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

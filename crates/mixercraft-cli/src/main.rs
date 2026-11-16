@@ -111,6 +111,14 @@ enum Cmd {
     LocalDevices,
     /// Print the default engine configuration.
     DefaultConfig,
+    /// Close the app and stop the engine of this installation, and wait
+    /// until their files can be replaced (used by the installer). On
+    /// Windows, an app or engine started from another folder is left alone.
+    CloseApp {
+        /// Give up after this many seconds.
+        #[arg(long, default_value_t = 20)]
+        timeout: u64,
+    },
     /// Start the engine automatically when you sign in.
     Autostart {
         #[command(subcommand)]
@@ -118,6 +126,16 @@ enum Cmd {
     },
     /// Stop the engine.
     Shutdown,
+    /// Check the release feed for a newer version (the app does this on
+    /// start and daily unless turned off).
+    Update {
+        /// Feed URL (default: the configured or built-in feed).
+        #[arg(long)]
+        feed: Option<String>,
+        /// Also download the installer and verify its SHA-256.
+        #[arg(long)]
+        download: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -135,7 +153,12 @@ enum AutostartCmd {
         now: bool,
     },
     /// Remove the sign-in registration.
-    Disable,
+    Disable {
+        /// Only if the registered engine lies in this folder (the
+        /// uninstaller leaves a registration of another copy alone).
+        #[arg(long)]
+        if_under: Option<std::path::PathBuf>,
+    },
     /// Show whether autostart is registered.
     Status,
 }
@@ -179,6 +202,8 @@ fn main() -> anyhow::Result<()> {
             return Ok(());
         }
         Cmd::Autostart { action } => return autostart(action),
+        Cmd::CloseApp { timeout } => return close_app(std::time::Duration::from_secs(*timeout)),
+        Cmd::Update { feed, download } => return update(feed.clone(), *download),
         _ => {}
     }
     let mut c =
@@ -229,7 +254,12 @@ fn main() -> anyhow::Result<()> {
             Request::SetBusKeepAwake { bus, keep_awake }
         }
         Cmd::Shutdown => Request::Shutdown,
-        Cmd::Capabilities | Cmd::LocalDevices | Cmd::DefaultConfig | Cmd::Autostart { .. } => {
+        Cmd::Capabilities
+        | Cmd::LocalDevices
+        | Cmd::DefaultConfig
+        | Cmd::Autostart { .. }
+        | Cmd::CloseApp { .. }
+        | Cmd::Update { .. } => {
             unreachable!("handled above")
         }
     };
@@ -370,7 +400,20 @@ fn autostart(action: &AutostartCmd) -> anyhow::Result<()> {
                 println!("engine started");
             }
         }
-        AutostartCmd::Disable => {
+        AutostartCmd::Disable { if_under } => {
+            if let Some(dir) = if_under {
+                match autostart::registered_engine()? {
+                    Some(engine) if path_is_under(&engine, dir) => {}
+                    Some(engine) => {
+                        println!("autostart left alone: it starts {}", engine.display());
+                        return Ok(());
+                    }
+                    None => {
+                        println!("autostart is not registered");
+                        return Ok(());
+                    }
+                }
+            }
             autostart::disable()?;
             println!("autostart disabled");
         }
@@ -380,6 +423,91 @@ fn autostart(action: &AutostartCmd) -> anyhow::Result<()> {
         },
     }
     Ok(())
+}
+
+fn update(feed: Option<String>, download: bool) -> anyhow::Result<()> {
+    use mixercraft_update::{Check, Settings};
+    let feed = feed.or_else(|| Settings::load().feed()).context(mixercraft_update::UpdateError::NoFeed)?;
+    println!("feed: {feed}");
+    match mixercraft_update::check(&feed, env!("CARGO_PKG_VERSION"))? {
+        Check::UpToDate { latest } => println!("up to date (this is {}, latest {latest})", env!("CARGO_PKG_VERSION")),
+        Check::Available(r) => {
+            println!("version {} is available (this is {})", r.version, env!("CARGO_PKG_VERSION"));
+            if !r.notes.is_empty() {
+                println!("{}", r.notes);
+            }
+            let Some(asset) = r.asset else {
+                println!("no installer for this platform");
+                return Ok(());
+            };
+            println!("installer: {} ({} bytes, SHA-256 {})", asset.url, asset.size, asset.sha256);
+            if download {
+                let dir = mixercraft_update::download_dir().context("no data folder")?;
+                let path = mixercraft_update::download(&r.version, &asset, &dir, &mut |_, _| {})?;
+                println!("downloaded and verified: {}", path.display());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether `path` lies in `dir` (case-insensitive on Windows, where the
+/// installer passes folder names in its own spelling).
+fn path_is_under(path: &std::path::Path, dir: &std::path::Path) -> bool {
+    let norm = |p: &std::path::Path| {
+        let s = p.to_string_lossy();
+        let s = if cfg!(windows) { s.replace('/', "\\").to_lowercase() } else { s.into_owned() };
+        s.trim_end_matches(std::path::MAIN_SEPARATOR).to_owned()
+    };
+    let (path, dir) = (norm(path), norm(dir));
+    path.strip_prefix(&dir).is_some_and(|rest| rest.starts_with(std::path::MAIN_SEPARATOR))
+}
+
+/// Closes the GUI and stops the engine that run from this program's folder,
+/// then waits until their executables can be replaced.
+fn close_app(timeout: std::time::Duration) -> anyhow::Result<()> {
+    use mixercraft_ipc::gui_instance::{self, Message};
+    use std::time::{Duration, Instant};
+    let exe = std::env::current_exe().context("cannot locate this program")?;
+    let dir = exe.parent().context("program has no folder")?;
+    let gui = dir.join(format!("mixercraft-gui{}", std::env::consts::EXE_SUFFIX));
+    let engine = dir.join(format!("mixercraftd{}", std::env::consts::EXE_SUFFIX));
+    // Elsewhere there is no cheap way to tell which copy runs; ask whatever runs.
+    let ours = |exe: &std::path::Path| !cfg!(windows) || executable_in_use(exe);
+    if ours(&gui) && gui_instance::send(Message::Quit).is_ok() {
+        println!("asked the app to close");
+    }
+    if ours(&engine)
+        && let Ok(mut c) = Client::connect("mixercraft-close-app")
+    {
+        c.request(&Request::Shutdown)?;
+        println!("asked the engine to stop");
+    }
+    let deadline = Instant::now() + timeout;
+    loop {
+        let busy: Vec<String> =
+            [&gui, &engine].into_iter().filter(|p| executable_in_use(p)).map(|p| p.display().to_string()).collect();
+        if busy.is_empty() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("still running after {}s: {}", timeout.as_secs(), busy.join(", "));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// Whether the program file `exe` is running. Windows refuses write access
+/// to the file of a running program (sharing violation); opening it writes
+/// nothing. Other platforms allow replacing running programs, so there it is
+/// never "in use".
+fn executable_in_use(exe: &std::path::Path) -> bool {
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    cfg!(windows)
+        && matches!(
+            std::fs::OpenOptions::new().write(true).open(exe),
+            Err(e) if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION)
+        )
 }
 
 /// `canonicalize` on Windows returns `\\?\C:\...` paths, which some tools
@@ -402,5 +530,26 @@ fn device_choice(arg: &str) -> mixercraft_ipc::DeviceChoice {
             DeviceChoice::Device { id: Some(id.into()), name: Some(format!("MixerCraft {}", &id["virtual:".len()..])) }
         }
         name => DeviceChoice::Device { id: None, name: Some(name.into()) },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::path_is_under;
+    use std::path::Path;
+
+    #[test]
+    fn path_is_under_matches_whole_folders() {
+        let sep = std::path::MAIN_SEPARATOR;
+        let p = |s: &str| s.replace('/', &sep.to_string());
+        assert!(path_is_under(Path::new(&p("/opt/mc/mixercraftd")), Path::new(&p("/opt/mc"))));
+        assert!(path_is_under(Path::new(&p("/opt/mc/mixercraftd")), Path::new(&p("/opt/mc/"))));
+        assert!(!path_is_under(Path::new(&p("/opt/mc2/mixercraftd")), Path::new(&p("/opt/mc"))));
+        assert!(!path_is_under(Path::new(&p("/opt/mc")), Path::new(&p("/opt/mc"))));
+        #[cfg(windows)]
+        assert!(path_is_under(
+            Path::new(r"C:\Users\A\AppData\Local\Programs\MixerCraft\mixercraftd.exe"),
+            Path::new(r"c:\users\a\appdata\local\programs\mixercraft\")
+        ));
     }
 }

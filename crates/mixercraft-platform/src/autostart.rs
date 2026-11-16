@@ -232,6 +232,52 @@ pub fn launchd_plist(spec: &AutostartSpec) -> String {
     )
 }
 
+fn xml_unescape(s: &str) -> String {
+    s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
+}
+
+/// The program a Task Scheduler definition starts (`<Command>`).
+#[must_use]
+pub fn command_of_task_xml(xml: &str) -> Option<PathBuf> {
+    let start = xml.find("<Command>")? + "<Command>".len();
+    let len = xml[start..].find("</Command>")?;
+    Some(PathBuf::from(xml_unescape(xml[start..start + len].trim().trim_matches('"'))))
+}
+
+/// The program a systemd unit written by [`systemd_unit`] starts.
+#[must_use]
+pub fn command_of_systemd_unit(unit: &str) -> Option<PathBuf> {
+    let exec = unit.lines().find_map(|l| l.strip_prefix("ExecStart="))?;
+    let quoted = exec.strip_prefix('"')?;
+    let mut out = String::new();
+    let mut chars = quoted.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => out.extend(chars.next()),
+            '"' => return Some(PathBuf::from(out.replace("%%", "%").replace("$$", "$"))),
+            c => out.push(c),
+        }
+    }
+    None
+}
+
+/// The program a LaunchAgent written by [`launchd_plist`] starts.
+#[must_use]
+pub fn command_of_launchd_plist(plist: &str) -> Option<PathBuf> {
+    let rest = &plist[plist.find("<key>ProgramArguments</key>")?..];
+    let start = rest.find("<string>")? + "<string>".len();
+    let len = rest[start..].find("</string>")?;
+    Some(PathBuf::from(xml_unescape(&rest[start..start + len])))
+}
+
+/// The engine executable the autostart registration starts, if registered.
+///
+/// # Errors
+/// I/O or system tool failures.
+pub fn registered_engine() -> Result<Option<PathBuf>, AutostartError> {
+    imp::registered_engine()
+}
+
 /// Registers autostart; with `start_now` also starts the engine immediately
 /// through the same mechanism (on macOS loading the agent always starts it).
 ///
@@ -309,6 +355,14 @@ mod imp {
         run("schtasks", &["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"]).map(|_| ())
     }
 
+    pub fn registered_engine() -> Result<Option<PathBuf>, AutostartError> {
+        match run("schtasks", &["/Query", "/TN", WINDOWS_TASK_NAME, "/XML", "ONE"]) {
+            Ok(xml) => Ok(command_of_task_xml(&xml)),
+            Err(AutostartError::Tool { .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     pub fn status() -> Result<AutostartState, AutostartError> {
         match run("schtasks", &["/Query", "/TN", WINDOWS_TASK_NAME, "/FO", "LIST"]) {
             Ok(_) => Ok(AutostartState::Enabled { detail: format!("Task Scheduler: \"{WINDOWS_TASK_NAME}\"") }),
@@ -349,6 +403,11 @@ mod imp {
             run("systemctl", &["--user", "daemon-reload"])?;
         }
         Ok(())
+    }
+
+    pub fn registered_engine() -> Result<Option<PathBuf>, AutostartError> {
+        let path = unit_path()?;
+        Ok(std::fs::read_to_string(path).ok().and_then(|unit| command_of_systemd_unit(&unit)))
     }
 
     pub fn status() -> Result<AutostartState, AutostartError> {
@@ -395,6 +454,11 @@ mod imp {
         Ok(())
     }
 
+    pub fn registered_engine() -> Result<Option<PathBuf>, AutostartError> {
+        let path = plist_path()?;
+        Ok(std::fs::read_to_string(path).ok().and_then(|plist| command_of_launchd_plist(&plist)))
+    }
+
     pub fn status() -> Result<AutostartState, AutostartError> {
         let path = plist_path()?;
         Ok(if path.exists() {
@@ -416,6 +480,9 @@ mod imp {
         Err(AutostartError::Unsupported)
     }
     pub fn status() -> Result<AutostartState, AutostartError> {
+        Err(AutostartError::Unsupported)
+    }
+    pub fn registered_engine() -> Result<Option<PathBuf>, AutostartError> {
         Err(AutostartError::Unsupported)
     }
 }
@@ -441,6 +508,16 @@ mod tests {
         assert!(xml.contains("<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>"));
         assert!(xml.contains("<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>"));
         assert!(xml.contains("<RunLevel>LeastPrivilege</RunLevel>"));
+    }
+
+    #[test]
+    fn registered_command_is_read_back() {
+        let s = spec();
+        assert_eq!(command_of_task_xml(&windows_task_xml(&s, r"PC\u")), Some(s.engine.clone()));
+        let odd = AutostartSpec { engine: PathBuf::from("/opt/a \"b\" 100%/$x/mixercraftd"), args: vec!["--x".into()] };
+        assert_eq!(command_of_systemd_unit(&systemd_unit(&odd)), Some(odd.engine.clone()));
+        assert_eq!(command_of_launchd_plist(&launchd_plist(&odd)), Some(odd.engine.clone()));
+        assert_eq!(command_of_task_xml("<Task/>"), None);
     }
 
     #[test]

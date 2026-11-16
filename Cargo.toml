@@ -11,6 +11,7 @@ members = [
     "crates/mixercraft-engine",
     "crates/mixercraft-cli",
     "crates/mixercraft-gui",
+    "crates/mixercraft-update",
 ]
 # Throwaway evaluation prototypes; not part of the product build or CI.
 exclude = ["spikes"]
@@ -31,6 +32,7 @@ mixercraft-platform = { path = "crates/mixercraft-platform" }
 mixercraft-usbip = { path = "crates/mixercraft-usbip" }
 mixercraft-winaudio = { path = "crates/mixercraft-winaudio" }
 mixercraft-denoise = { path = "crates/mixercraft-denoise" }
+mixercraft-update = { path = "crates/mixercraft-update" }
 
 anyhow = "1.0.100"
 ctrlc = "3.4"

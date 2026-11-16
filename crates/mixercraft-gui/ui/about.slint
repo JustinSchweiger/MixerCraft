@@ -1,8 +1,33 @@
 import { Theme } from "theme.slint";
-import { AboutSlint } from "std-widgets.slint";
+import { PillButton } from "controls.slint";
+import { AboutSlint, CheckBox, ProgressIndicator } from "std-widgets.slint";
+
+// Updater state shown on the About page (set from src/update.rs).
+export struct UpdateView {
+    // 0 idle, 1 checking, 2 update available, 3 downloading, 4 installing,
+    // 5 error, 6 up to date, 7 not configured
+    state: int,
+    // One line: "Up to date (checked 14:02)", "Version 0.2.0 is available", …
+    status: string,
+    // Release notes of an available version.
+    notes: string,
+    // Download progress 0..1.
+    progress: float,
+    // The available version can be installed from here (installed copy with
+    // an installer for this platform).
+    can-install: bool,
+    // There is a release-notes page to open.
+    has-notes-url: bool,
+}
 
 export component AboutView inherits Rectangle {
     in property <string> version;
+    in property <UpdateView> update;
+    in property <bool> update-auto;
+    callback check-updates();
+    callback install-update();
+    callback set-update-auto(bool);
+    callback open-release-notes();
     border-radius: 12px;
     background: Theme.section;
     border-width: 1px;
@@ -33,13 +58,84 @@ export component AboutView inherits Rectangle {
             color: Theme.text-dim;
             horizontal-alignment: center;
         }
+
+        // Updates
+        HorizontalLayout {
+            Rectangle { horizontal-stretch: 1; }
+            Rectangle {
+                max-width: 520px;
+                horizontal-stretch: 100;
+                border-radius: Theme.radius;
+                border-width: 1px;
+                border-color: root.update.state == 2 ? Theme.accent : Theme.section-border;
+                background: root.update.state == 2 ? Theme.accent-bg : Theme.strip;
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 10px;
+                    Text {
+                        text: root.update.status;
+                        font-size: Theme.font;
+                        font-weight: 600;
+                        color: root.update.state == 5 ? Theme.red : Theme.text;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                        accessible-role: text;
+                    }
+                    if root.update.notes != "": Text {
+                        text: root.update.notes;
+                        font-size: Theme.font-small;
+                        color: Theme.text-mid;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                    if root.update.state == 3: ProgressIndicator {
+                        height: 6px;
+                        progress: root.update.progress;
+                    }
+                    if root.update.state == 2 && root.update.can-install: Text {
+                        text: "Installing closes MixerCraft and stops the audio engine for a few seconds; both start again afterwards. Your settings are kept.";
+                        font-size: Theme.font-small;
+                        color: Theme.text-dim;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 8px;
+                        if root.update.state == 2 && root.update.can-install: PillButton {
+                            text: "Download and install";
+                            active: true;
+                            clicked => { root.install-update(); }
+                        }
+                        if root.update.has-notes-url: PillButton {
+                            text: "Release notes";
+                            clicked => { root.open-release-notes(); }
+                        }
+                        if root.update.state != 1 && root.update.state != 3 && root.update.state != 4 && root.update.state != 7: PillButton {
+                            text: "Check now";
+                            clicked => { root.check-updates(); }
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        CheckBox {
+                            text: "Check for updates automatically (on start and daily)";
+                            checked: root.update-auto;
+                            enabled: root.update.state != 7;
+                            toggled => { root.set-update-auto(self.checked); }
+                        }
+                    }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+
         Text {
             text: "Licensed under MIT OR Apache-2.0.";
             font-size: Theme.font-small;
             color: Theme.text-dim;
             horizontal-alignment: center;
         }
-        Rectangle { height: 8px; }
         HorizontalLayout {
             alignment: center;
             AboutSlint { }

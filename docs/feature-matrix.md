@@ -33,8 +33,8 @@ and runs the hardware-independent tests on all three platforms.
 | Engine before login | 🗓 service; startup-sound routing to be verified | ⛔ PipeWire is per user session | ⛔ firmware chime not routable |
 | Desktop GUI (mixer, routing, mute/solo, meters, knobs, device pickers, diagnostics, custom title bar) | 🟡 verified against the engine; settings pending | 🟡 builds in CI only | 🟡 builds in CI only |
 | Tray icon, close-to-tray, single instance | 🟡 icon registration, hide/show, second-launch activation and `--tray` verified; menu clicks not yet exercised | 🗓 tray via KSNI (no GTK); single instance works, closing quits | 🟡 same code as Windows, untested |
-| Installers | 🗓 MSI | 🗓 .deb / .rpm / AppImage | 🗓 .pkg / .dmg |
-| In-app updates | 🗓 | 🗓 (notify-only for distro packages) | 🗓 |
+| Installers | 🟡 per-user MSI (WiX 5, unsigned): install, upgrade with running app/engine, uninstall verified; shortcuts, start with Windows, PATH, usbip-win2 notice; no engine service, no per-machine variant | 🗓 .deb / .rpm / AppImage | 🗓 .pkg / .dmg |
+| In-app updates | 🟡 feed check on start + daily (can be turned off), download, size + SHA-256 check, MSI install with app/engine restart: verified against a local fake feed; manifests not yet signed (ADR 0006); no real release published yet | 🗓 (notify-only for distro packages; checks run, no installer target) | 🗓 (checks run, no installer target) |
 
 The capability model in `crates/mixercraft-platform/src/capabilities.rs`
 reports these states at runtime and must be kept in sync with this table.

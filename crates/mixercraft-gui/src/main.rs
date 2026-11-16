@@ -16,6 +16,7 @@ mod fx_law;
 mod meters;
 #[cfg(any(windows, target_os = "macos"))]
 mod tray;
+mod update;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -39,7 +40,7 @@ use crate::engine::{Cmd, Update};
 mod ui {
     slint::include_modules!();
 }
-use ui::{DeviceRow, MainWindow, MeterView, StripView};
+use ui::{DeviceRow, MainWindow, MeterView, StripView, UpdateView};
 
 /// After a local edit, status polls do not overwrite that strip for this long
 /// (the engine may not have applied the change yet).
@@ -650,6 +651,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let _ = t.send(Cmd::AddBus);
     });
     install_window_actions(&ui);
+    install_updater(&ui);
     let t = tx.clone();
     ui.on_start_engine(move || {
         let _ = t.send(Cmd::StartEngine);
@@ -660,11 +662,17 @@ fn main() -> Result<(), slint::PlatformError> {
         std::thread::Builder::new()
             .name("mixercraft-gui-instance".into())
             .spawn(move || {
-                mixercraft_ipc::gui_instance::serve(&listener, || {
+                mixercraft_ipc::gui_instance::serve(&listener, |message| {
                     let w = w.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(ui) = w.upgrade() {
-                            show_window(&ui);
+                    let _ = slint::invoke_from_event_loop(move || match message {
+                        mixercraft_ipc::gui_instance::Message::Show => {
+                            if let Some(ui) = w.upgrade() {
+                                show_window(&ui);
+                            }
+                        }
+                        // The installer is about to replace the app's files.
+                        mixercraft_ipc::gui_instance::Message::Quit => {
+                            let _ = slint::quit_event_loop();
                         }
                     });
                 });
@@ -698,6 +706,61 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.show()?;
     }
     slint::run_event_loop_until_quit()
+}
+
+/// Starts the update thread and connects the About page to it.
+fn install_updater(ui: &MainWindow) {
+    use update::UpdateCmd;
+    let settings = mixercraft_update::Settings::load();
+    ui.set_update_auto(settings.check_automatically);
+    let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(std::path::Path::to_path_buf));
+    let (tx, rx) = mpsc::channel::<UpdateCmd>();
+    let weak = ui.as_weak();
+    std::thread::Builder::new()
+        .name("mixercraft-gui-update".into())
+        .spawn(move || {
+            update::run(&rx, settings, exe_dir.unwrap_or_default(), &|event| {
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || match event {
+                    update::Event::View(v) => {
+                        if let Some(ui) = weak.upgrade() {
+                            ui.set_update(UpdateView {
+                                state: v.state,
+                                status: v.status.into(),
+                                notes: v.notes.into(),
+                                progress: v.progress,
+                                can_install: v.can_install,
+                                has_notes_url: v.has_notes_url,
+                            });
+                        }
+                    }
+                    // The installer replaces the app's files and starts it again.
+                    update::Event::QuitForInstall => {
+                        let _ = slint::quit_event_loop();
+                    }
+                });
+            });
+        })
+        .expect("spawn update thread");
+    let t = tx.clone();
+    ui.on_check_updates(move || {
+        let _ = t.send(UpdateCmd::Check);
+    });
+    let t = tx.clone();
+    ui.on_install_update(move || {
+        let _ = t.send(UpdateCmd::Install);
+    });
+    let t = tx.clone();
+    ui.on_open_release_notes(move || {
+        let _ = t.send(UpdateCmd::OpenNotes);
+    });
+    let w = ui.as_weak();
+    ui.on_set_update_auto(move |on| {
+        if let Some(ui) = w.upgrade() {
+            ui.set_update_auto(on);
+        }
+        let _ = tx.send(UpdateCmd::SetAuto(on));
+    });
 }
 
 /// Title-bar dragging, the window buttons and edge resizing of the

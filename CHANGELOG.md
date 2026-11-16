@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Windows installer: per-user MSI (no administrator rights) built with
+  `scripts/build-installer.ps1` (WiX Toolset 5, free). Start-menu entry;
+  optional desktop shortcut, start with Windows (tray app and engine
+  autostart task) and `mixercraft` on the user PATH. Explains when usbip-win2
+  (virtual devices) is missing, without installing drivers. Upgrades close the
+  app and this installation's engine first and keep the configuration;
+  uninstall removes the autostart task. See `docs/development/releasing.md`.
+- In-app updates: the app checks a release feed 20 s after start and daily
+  (can be turned off on the About tab), shows "Update available" in the title
+  bar, and on "Download and install" downloads the MSI, verifies its size and
+  SHA-256 and runs it; the app and engine restart afterwards. New crate
+  `mixercraft-update`; `mixercraft update [--feed URL] [--download]` checks
+  from the command line. Releases come from the GitHub Releases of the
+  public repository (ADR 0006); the feed URL can be changed in
+  `updates.toml`.
+- `mixercraft close-app` closes the app and stops the engine of this
+  installation (used by the installer); `mixercraft autostart disable
+  --if-under <folder>`.
+
 ### Changed
 - Minimum supported Rust version is now 1.95 (required by Slint).
 - Configuration schema 3 (schema 2 added per-strip `fx`; schema 3 adds

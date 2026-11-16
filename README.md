@@ -9,8 +9,9 @@ macOS.
 > autostart and a first desktop mixer window work and have been exercised on
 > Windows hardware, including per-strip gate/compressor/EQ and, on Windows,
 > virtual devices (emulated USB audio devices; requires the free
-> [usbip-win2](https://github.com/vadimgrn/usbip-win2) driver). There is no
-> installer yet. See the
+> [usbip-win2](https://github.com/vadimgrn/usbip-win2) driver). Windows has
+> a per-user MSI installer with in-app updates
+> ([building and releasing](docs/development/releasing.md)). See the
 > [roadmap](docs/roadmap.md) and the [feature matrix](docs/feature-matrix.md)
 > for exactly what works where.
 

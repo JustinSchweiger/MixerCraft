@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 mixercraft-ipc.workspace = true
+mixercraft-update.workspace = true
 slint.workspace = true
 
 [build-dependencies]
