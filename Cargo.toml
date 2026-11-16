@@ -8,6 +8,8 @@ members = [
     "crates/mixercraft-engine",
     "crates/mixercraft-cli",
 ]
+# Throwaway evaluation prototypes; not part of the product build or CI.
+exclude = ["spikes"]
 
 [workspace.package]
 version = "0.1.0"

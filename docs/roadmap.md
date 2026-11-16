@@ -11,7 +11,7 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 | 4b | Native WASAPI (IAudioClient3, MMCSS), PipeWire graph node | 🗓 |
 | 5 | Virtual devices | 🗓 blocked on Windows by driver signing ([ADR 0007](adr/0007-windows-driver-signing.md)); Linux and macOS can start |
 | 6 | Background engine and recovery | 🟡 done: IPC, single instance, recovery state machine, watchdog, software clock fallback, diagnostics, config persistence, latency recovery, per-user autostart (Windows verified except an actual sign-in), log files, console-less engine. Missing: device-arrival notifications, sleep/resume tests, Windows service mode for pre-login start |
-| 7 | Production GUI | 🗓 framework spike first ([ADR 0005](adr/0005-gui-framework.md)) |
+| 7 | Production GUI | 🟡 framework chosen after a measured spike: Slint, software renderer ([ADR 0005](adr/0005-gui-framework.md)); mixer view next |
 | 8 | Packaging and release pipeline | 🗓 ([ADR 0006](adr/0006-distribution-and-updates.md)) |
 | 9 | Automatic updates | 🗓 |
 | 10 | Hardening: long soak tests, self-hosted hardware runners | 🗓 |
@@ -24,7 +24,7 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
    LaunchAgent).
 3. Linux virtual devices (PipeWire null-audio-sink nodes) — the first
    platform where virtual endpoints need no signing.
-4. GUI framework spike, then the mixer view.
+4. Mixer view in Slint (framework spike done, see ADR 0005).
 5. Native WASAPI backend for low latency.
 6. macOS HAL plug-in; Windows driver once signing is arranged.
 

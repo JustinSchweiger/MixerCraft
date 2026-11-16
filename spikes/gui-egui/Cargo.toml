@@ -1,0 +1,15 @@
+[package]
+name = "gui-spike-egui"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+eframe = "0.37.0"
+
+[profile.release]
+debug = false
+lto = "thin"
+codegen-units = 1
+
+[workspace]

@@ -46,7 +46,7 @@ warnings`) · `cargo test --workspace` · `cargo test -p mixercraft-core
 ## Decisions and open questions
 See `docs/adr/`. The owner wants zero recurring cost: Windows virtual endpoints follow the
 free path in ADR 0007 (none first, then a USB/IP spike, OSSign inquiry).
-License MIT OR Apache-2.0 is accepted (ADR 0008). GUI framework pending a spike (ADR 0005).
+License MIT OR Apache-2.0 is accepted (ADR 0008). GUI: Slint with the software renderer (ADR 0005); faders need numeric `accessible-value`.
 
 ## Known risks
 Windows kernel-driver signing; startup-sound routing feasibility (needs a
