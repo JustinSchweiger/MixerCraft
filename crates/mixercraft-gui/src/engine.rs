@@ -1,0 +1,222 @@
+//! Background connection to the engine.
+//!
+//! One thread owns the IPC client. It polls meters at ~30 Hz and status at
+//! 2 Hz, forwards user commands (coalescing fader moves so a fast drag sends
+//! only the latest value), reconnects automatically, and can start the
+//! engine. It never touches Slint types; the UI receives [`Update`]s.
+
+use std::collections::HashSet;
+use std::process::Command;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::time::{Duration, Instant};
+
+use mixercraft_ipc::{Client, EngineStatus, IpcError, Request, Response};
+
+use crate::meters::Channel;
+
+const METER_INTERVAL: Duration = Duration::from_millis(33);
+const STATUS_INTERVAL: Duration = Duration::from_millis(500);
+const RECONNECT_INTERVAL: Duration = Duration::from_millis(1000);
+
+/// A user action to forward to the engine.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Cmd {
+    StripGain(u16, f32),
+    BusGain(u16, f32),
+    StripMute(u16, bool),
+    BusMute(u16, bool),
+    StripSolo(u16, bool),
+    Route { strip: u16, bus: u16, on: bool },
+    StartEngine,
+}
+
+/// Something the UI should show.
+#[derive(Debug)]
+pub enum Update {
+    /// No engine reachable; `hint` explains what to do.
+    Disconnected { hint: String },
+    /// Fresh engine status.
+    Status(Box<EngineStatus>),
+    /// Meter display values per strip and bus: `[left, right, left peak, right peak]`.
+    Meters { strips: Vec<[f32; 4]>, buses: Vec<[f32; 4]> },
+}
+
+/// Keeps only the last fader value per target; other commands keep order.
+#[must_use]
+pub fn coalesce(cmds: Vec<Cmd>) -> Vec<Cmd> {
+    let mut seen = HashSet::new();
+    let mut out: Vec<Cmd> = cmds
+        .into_iter()
+        .rev()
+        .filter(|c| match c {
+            Cmd::StripGain(i, _) => seen.insert((false, *i)),
+            Cmd::BusGain(i, _) => seen.insert((true, *i)),
+            _ => true,
+        })
+        .collect();
+    out.reverse();
+    out
+}
+
+fn request_for(cmd: &Cmd) -> Option<Request> {
+    Some(match *cmd {
+        Cmd::StripGain(strip, db) => Request::SetStripGain { strip, db },
+        Cmd::BusGain(bus, db) => Request::SetBusGain { bus, db },
+        Cmd::StripMute(strip, mute) => Request::SetStripMute { strip, mute },
+        Cmd::BusMute(bus, mute) => Request::SetBusMute { bus, mute },
+        Cmd::StripSolo(strip, solo) => Request::SetStripSolo { strip, solo },
+        Cmd::Route { strip, bus, on } => Request::SetRoute { strip, bus, enabled: on },
+        Cmd::StartEngine => return None,
+    })
+}
+
+/// Starts `mixercraftd` from the directory of this executable.
+fn start_engine() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let engine = exe.with_file_name(format!("mixercraftd{}", std::env::consts::EXE_SUFFIX));
+    if !engine.exists() {
+        return Err(format!("mixercraftd not found next to the app ({})", engine.display()));
+    }
+    let mut cmd = Command::new(&engine);
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd.spawn().map(|_| ()).map_err(|e| format!("cannot start {}: {e}", engine.display()))
+}
+
+/// Runs the connection loop until the command channel closes.
+pub fn run(rx: &Receiver<Cmd>, deliver: &dyn Fn(Update)) {
+    let mut client: Option<Client> = None;
+    let mut hint = String::from("Start it here, or run `mixercraft autostart enable` to start it at sign-in.");
+    let mut announced_disconnect = false;
+    let mut strips: Vec<[Channel; 2]> = Vec::new();
+    let mut buses: Vec<[Channel; 2]> = Vec::new();
+    let mut last_meter = Instant::now();
+    let mut next_meter = Instant::now();
+    let mut next_status = Instant::now();
+
+    loop {
+        let Some(c) = client.as_mut() else {
+            match Client::connect("mixercraft-gui") {
+                Ok(c) => {
+                    client = Some(c);
+                    announced_disconnect = false;
+                    next_status = Instant::now();
+                    continue;
+                }
+                Err(_) if !announced_disconnect => {
+                    deliver(Update::Disconnected { hint: hint.clone() });
+                    announced_disconnect = true;
+                }
+                Err(_) => {}
+            }
+            match rx.recv_timeout(RECONNECT_INTERVAL) {
+                Ok(Cmd::StartEngine) => {
+                    hint = match start_engine() {
+                        Ok(()) => "Starting the engine…".into(),
+                        Err(e) => e,
+                    };
+                    deliver(Update::Disconnected { hint: hint.clone() });
+                    std::thread::sleep(Duration::from_millis(300));
+                }
+                Ok(_) | Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+            continue;
+        };
+
+        let deadline = next_meter.min(next_status);
+        let mut pending = Vec::new();
+        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(cmd) => {
+                pending.push(cmd);
+                while let Ok(more) = rx.try_recv() {
+                    pending.push(more);
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return,
+        }
+
+        let mut failed = false;
+        for cmd in coalesce(pending) {
+            let Some(req) = request_for(&cmd) else { continue };
+            match c.request(&req) {
+                Ok(_) | Err(IpcError::Remote { .. }) => {}
+                Err(_) => {
+                    failed = true;
+                    break;
+                }
+            }
+        }
+
+        let now = Instant::now();
+        if !failed && now >= next_meter {
+            match c.request(&Request::Meters) {
+                Ok(Response::Meters(m)) => {
+                    let dt = now - last_meter;
+                    last_meter = now;
+                    let s = advance(&mut strips, &m.strips, dt);
+                    let b = advance(&mut buses, &m.buses, dt);
+                    deliver(Update::Meters { strips: s, buses: b });
+                }
+                Ok(_) | Err(IpcError::Remote { .. }) => {}
+                Err(_) => failed = true,
+            }
+            next_meter = (next_meter + METER_INTERVAL).max(now);
+        }
+        if !failed && now >= next_status {
+            match c.request(&Request::Status) {
+                Ok(Response::Status(s)) => deliver(Update::Status(s)),
+                Ok(_) | Err(IpcError::Remote { .. }) => {}
+                Err(_) => failed = true,
+            }
+            next_status = now + STATUS_INTERVAL;
+        }
+        if failed {
+            client = None;
+            hint = "The connection to the engine was lost. Reconnecting…".into();
+        }
+    }
+}
+
+fn advance(state: &mut Vec<[Channel; 2]>, levels: &[Vec<mixercraft_ipc::Level>], dt: Duration) -> Vec<[f32; 4]> {
+    state.resize(levels.len(), [Channel::default(); 2]);
+    state
+        .iter_mut()
+        .zip(levels)
+        .map(|(chs, lv)| {
+            let l = lv.first().map_or(0.0, |x| x.peak);
+            // Mono sources show the same level on both meters.
+            let r = lv.get(1).map_or(l, |x| x.peak);
+            chs[0].update(l, dt);
+            chs[1].update(r, dt);
+            [chs[0].level, chs[1].level, chs[0].peak, chs[1].peak]
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn coalesce_keeps_last_gain_per_target_and_order_of_others() {
+        let cmds = vec![
+            Cmd::StripGain(0, -10.0),
+            Cmd::StripMute(0, true),
+            Cmd::StripGain(1, -3.0),
+            Cmd::StripGain(0, -6.0),
+            Cmd::BusGain(0, 1.0),
+            Cmd::BusGain(0, 2.0),
+        ];
+        assert_eq!(
+            coalesce(cmds),
+            vec![Cmd::StripMute(0, true), Cmd::StripGain(1, -3.0), Cmd::StripGain(0, -6.0), Cmd::BusGain(0, 2.0)]
+        );
+    }
+}

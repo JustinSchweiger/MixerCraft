@@ -35,8 +35,9 @@ env:
   CARGO_INCREMENTAL: "0"
   RUSTFLAGS: -D warnings
   # Linux build dependencies: ALSA (cpal default host), PipeWire + libclang
-  # (optional native PipeWire host, bindgen).
-  LINUX_DEPS: libasound2-dev libpipewire-0.3-dev libclang-dev pkg-config
+  # (optional native PipeWire host, bindgen), fontconfig/xkbcommon/wayland
+  # (Slint GUI on Linux).
+  LINUX_DEPS: libasound2-dev libpipewire-0.3-dev libclang-dev pkg-config libfontconfig1-dev libxkbcommon-dev libwayland-dev
 
 jobs:
   fmt:
@@ -109,7 +110,7 @@ jobs:
       - run: cargo build --workspace --locked --target ${{ matrix.target }}
 
   msrv:
-    name: MSRV (1.88)
+    name: MSRV (1.95)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -118,7 +119,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $LINUX_DEPS
       - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
-          toolchain: "1.88"
+          toolchain: "1.95"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo check --workspace --locked
 
@@ -147,11 +148,12 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - run: cargo build --release --locked -p mixercraft-engine -p mixercraft-cli
+      - run: cargo build --release --locked -p mixercraft-engine -p mixercraft-cli -p mixercraft-gui
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mixercraft-dev-${{ matrix.name }}
           path: |
             target/release/mixercraftd${{ matrix.exe }}
             target/release/mixercraft${{ matrix.exe }}
+            target/release/mixercraft-gui${{ matrix.exe }}
           retention-days: 14

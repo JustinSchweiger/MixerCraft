@@ -191,7 +191,8 @@ fn main() -> anyhow::Result<()> {
             if !s.recovery_events.is_empty() {
                 println!("recovery events:");
                 for e in s.recovery_events.iter().rev().take(10) {
-                    println!("  {:>8.1}s {} {}: {}", e.at_secs, e.device, e.event, e.detail);
+                    let times = if e.count > 1 { format!(" (×{})", e.count) } else { String::new() };
+                    println!("  {:>8.1}s {} {}: {}{times}", e.at_secs, e.device, e.event, e.detail);
                 }
             }
         }

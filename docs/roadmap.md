@@ -11,7 +11,7 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 | 4b | Native WASAPI (IAudioClient3, MMCSS), PipeWire graph node | 🗓 |
 | 5 | Virtual devices | 🗓 blocked on Windows by driver signing ([ADR 0007](adr/0007-windows-driver-signing.md)); Linux and macOS can start |
 | 6 | Background engine and recovery | 🟡 done: IPC, single instance, recovery state machine, watchdog, software clock fallback, diagnostics, config persistence, latency recovery, per-user autostart (Windows verified except an actual sign-in), log files, console-less engine. Missing: device-arrival notifications, sleep/resume tests, Windows service mode for pre-login start |
-| 7 | Production GUI | 🟡 framework chosen after a measured spike: Slint, software renderer ([ADR 0005](adr/0005-gui-framework.md)); mixer view next |
+| 7 | Production GUI | 🟡 Slint mixer window connected to the engine (faders, mute/solo, routing, LED meters, diagnostics, engine start). Next: tray icon, strip processing (gate/compressor/EQ, engine first), global hotkeys, settings |
 | 8 | Packaging and release pipeline | 🗓 ([ADR 0006](adr/0006-distribution-and-updates.md)) |
 | 9 | Automatic updates | 🗓 |
 | 10 | Hardening: long soak tests, self-hosted hardware runners | 🗓 |
@@ -24,7 +24,7 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
    LaunchAgent).
 3. Linux virtual devices (PipeWire null-audio-sink nodes) — the first
    platform where virtual endpoints need no signing.
-4. Mixer view in Slint (framework spike done, see ADR 0005).
+4. GUI: tray icon, then gate/compressor/EQ (engine DSP + strip panel), then global hotkeys.
 5. Native WASAPI backend for low latency.
 6. macOS HAL plug-in; Windows driver once signing is arranged.
 
@@ -36,6 +36,7 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 | 2026-11-16 | same | same | 4-minute release run with timestamped FIFO events: zero underruns at startup (warm-up + measured targets at 960 frames / 20 ms); one simultaneous underrun on both FIFOs at 85 s with engine load ≤ 2.7 %, consistent with a delayed master-device callback during heavy compilation (cause not proven). Both targets then rose to 2160 frames (45 ms) and stayed there. |
 | 2026-11-16 | same | same | Latency recovery (3 runs, 300 ms process freeze injected via `NtSuspendProcess`). Final run: the freeze at 6.6 s caused underruns on both FIFOs (expected for a stall longer than any buffer); afterwards **no further gaps for ~10 minutes**. Recovery started after 5 quiet minutes; mic FIFO 47 → 20 ms, output FIFO 48 → 31.3 ms (its measured requirement: the master occasionally delivers double periods) with no re-raise. Earlier runs exposed the shrink/raise oscillation and re-prime gaps that the final code fixes. Also seen once: a mic underrun 1.0 s after start, just past the 250 ms warm-up (now covered by a 1 s startup grace). |
 | 2026-11-16 | same | same | 10-minute run of the console-less release build: an output FIFO shrank below a rare requirement and was raised again with **zero gaps** (smooth raise); mic FIFO recovered 30 → 20 ms. One unexplained mic underrun at 51 s with no stall injected and no heavy load. |
+| 2026-11-16 | same | same | Desktop GUI against the running engine: live meters; mute, A1 route and keyboard fader control verified end to end through UI Automation; engine-not-running screen and reconnect. Release GUI while metering: 8.4 % of one core, 6.8 MB private memory. During a GUI rebuild on all cores the engine logged 13 gaps and one overload (peak cycle 123 % of budget) — further evidence for real-time thread priority (native WASAPI backend). |
 | 2026-11-16 | same | same | Autostart: `mixercraft autostart enable --now` created the Task Scheduler task without elevation; Task Scheduler started the engine (parent `svchost`, no window, no console host, normal priority); stored settings confirmed (logon trigger, no time limit, battery allowed, 3 restarts at 1 min, least privilege). `disable` removed it. Start at an actual sign-in not tested. |
 
 ## Known limitations found in testing

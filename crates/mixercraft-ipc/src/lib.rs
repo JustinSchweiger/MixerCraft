@@ -214,6 +214,9 @@ pub struct RecoveryEvent {
     pub device: String,
     pub event: String,
     pub detail: String,
+    /// How many identical consecutive events this entry stands for
+    /// (`at_secs` is the latest). 0 from older engines means 1.
+    pub count: u32,
 }
 
 /// Levels of one channel (linear amplitude).

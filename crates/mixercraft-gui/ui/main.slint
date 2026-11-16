@@ -1,0 +1,137 @@
+import { Theme } from "theme.slint";
+import { PillButton } from "controls.slint";
+import { MixerView, StripView, MeterView } from "mixer.slint";
+import { DiagnosticsView, DeviceRow } from "diagnostics.slint";
+
+export { StripView, MeterView, DeviceRow }
+
+export component MainWindow inherits Window {
+    title: "MixerCraft";
+    icon: @image-url("icon.png");
+    preferred-width: 1000px;
+    preferred-height: 560px;
+    min-width: 640px;
+    min-height: 420px;
+    background: Theme.bg;
+    default-font-size: 12px;
+
+    in property <bool> connected;
+    in property <string> status-text;
+    in property <color> status-color: Theme.text-dim;
+    in property <string> connection-hint;
+    in-out property <int> tab: 0;
+
+    in property <[StripView]> strips;
+    in property <[MeterView]> strip-meters;
+    in property <[StripView]> buses;
+    in property <[MeterView]> bus-meters;
+    in property <[string]> bus-ids;
+
+    in property <[DeviceRow]> devices;
+    in property <[string]> events;
+    in property <string> engine-line;
+
+    callback strip-gain(int, float);
+    callback strip-mute(int);
+    callback strip-solo(int);
+    callback strip-route(int, int);
+    callback bus-gain(int, float);
+    callback bus-mute(int);
+    callback start-engine();
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 10px;
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: "Mixer";
+                font-size: 15px;
+                color: Theme.text;
+                vertical-alignment: center;
+            }
+            Text {
+                text: "Craft";
+                font-size: 15px;
+                color: Theme.accent;
+                vertical-alignment: center;
+            }
+            Rectangle { width: 8px; }
+            PillButton { text: "Mixer"; active: root.tab == 0; clicked => { root.tab = 0; } }
+            PillButton { text: "Diagnostics"; active: root.tab == 1; clicked => { root.tab = 1; } }
+            Rectangle { horizontal-stretch: 1; }
+            Rectangle {
+                height: 24px;
+                border-radius: 12px;
+                border-width: 1px;
+                border-color: Theme.line;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 12px;
+                    spacing: 7px;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle { width: 8px; height: 8px; border-radius: 4px; background: root.status-color; }
+                    }
+                    Text { text: root.status-text; font-size: 11px; color: Theme.text-mid; vertical-alignment: center; }
+                }
+            }
+        }
+
+        if !root.connected: Rectangle {
+            vertical-stretch: 1;
+            border-radius: 10px;
+            background: Theme.section;
+            border-width: 1px;
+            border-color: Theme.section-border;
+            VerticalLayout {
+                alignment: center;
+                spacing: 12px;
+                Text {
+                    text: "The audio engine isn't running";
+                    font-size: 16px;
+                    color: Theme.text;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: root.connection-hint;
+                    font-size: 12px;
+                    color: Theme.text-dim;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    PillButton { text: "Start engine"; active: true; clicked => { root.start-engine(); } }
+                }
+            }
+        }
+
+        if root.connected && root.tab == 0: MixerView {
+            vertical-stretch: 1;
+            strips: root.strips;
+            strip-meters: root.strip-meters;
+            buses: root.buses;
+            bus-meters: root.bus-meters;
+            bus-ids: root.bus-ids;
+            strip-gain(i, p) => { root.strip-gain(i, p); }
+            strip-mute(i) => { root.strip-mute(i); }
+            strip-solo(i) => { root.strip-solo(i); }
+            strip-route(i, b) => { root.strip-route(i, b); }
+            bus-gain(i, p) => { root.bus-gain(i, p); }
+            bus-mute(i) => { root.bus-mute(i); }
+        }
+
+        if root.connected && root.tab == 1: DiagnosticsView {
+            vertical-stretch: 1;
+            devices: root.devices;
+            events: root.events;
+            engine-line: root.engine-line;
+        }
+
+        HorizontalLayout {
+            Rectangle { horizontal-stretch: 1; }
+            Text { text: "Made with Slint"; font-size: 10px; color: Theme.text-dim; }
+        }
+    }
+}
