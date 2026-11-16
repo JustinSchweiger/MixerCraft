@@ -226,8 +226,12 @@ export component MainWindow inherits Window {
 
                 if root.connected && root.tab == 0: sv := ScrollView {
                     vertical-stretch: 1;
+                    // When the strips are wider than the window, leave room
+                    // for the horizontal scroll bar below them instead of
+                    // drawing it over the faders.
+                    property <bool> h-scroll: mixer.preferred-width > self.width;
                     content-width: max(self.visible-width, mixer.preferred-width);
-                    content-height: max(self.visible-height, mixer.min-height);
+                    content-height: max(self.height - (self.h-scroll ? 18px : 0px), mixer.min-height);
                     mixer := MixerView {
                         width: sv.content-width;
                         height: sv.content-height;
