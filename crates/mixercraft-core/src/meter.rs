@@ -51,7 +51,7 @@ impl MeterBank {
     /// Measures `block` and publishes the result. Real-time safe.
     pub fn publish(&self, block: &AudioBlock) {
         let n = self.channels.min(block.channels());
-        for ch in 0..n {
+        for (ch, cell) in self.cells.iter().enumerate().take(n) {
             let samples = block.channel(ch);
             let mut peak = 0.0f32;
             let mut sum_sq = 0.0f32;
@@ -60,7 +60,6 @@ impl MeterBank {
                 sum_sq += s * s;
             }
             let rms = if samples.is_empty() { 0.0 } else { (sum_sq / samples.len() as f32).sqrt() };
-            let cell = &self.cells[ch];
             // For non-negative finite floats the IEEE-754 bit pattern is
             // monotonic, so an integer max is a float max.
             if peak.is_finite() {

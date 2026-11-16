@@ -713,7 +713,6 @@ version = "0.1.0"
 dependencies = [
  "cpal",
  "thiserror 2.0.21",
- "tracing",
 ]
 
 [[package]]
