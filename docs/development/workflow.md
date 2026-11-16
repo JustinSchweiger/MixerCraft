@@ -27,6 +27,16 @@ These are settings, not files, so they must be applied by a repository admin
 4. **Security:** enable Dependabot alerts, secret scanning and push
    protection.
 
+## CI minutes (private repository)
+
+The repository is private on a free GitHub account: branch protection is
+not enforced and Actions minutes are limited (macOS runners count 10×,
+Windows 2×; a full CI run costs about 50 minutes). Therefore:
+
+* CI skips changes that only touch Markdown, `docs/`, license files or
+  issue/PR templates. Trigger it manually from the Actions tab if needed.
+* "Require green CI before merging" is a convention, not an enforced rule.
+
 ## Releases
 
 Not implemented yet (phase 8). The rules are fixed already:
