@@ -163,7 +163,7 @@
       <Custom Action="CloseMixerCraft" Before="InstallValidate"
               Condition="WIX_UPGRADE_DETECTED OR REMOVE~=&quot;ALL&quot;" />
       <Custom Action="DisableAppAutostart" Before="RemoveFiles"
-              Condition="(REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE) OR (&amp;Autostart=2 AND !Autostart=3)" />
+              Condition="NOT UPGRADINGPRODUCTCODE AND (REMOVE~=&quot;ALL&quot; OR (&amp;Autostart=2 AND !Autostart=3))" />
       <Custom Action="DisableEngineAutostart" Before="RemoveFiles"
               Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="EnableAppAutostart" After="InstallFiles"
