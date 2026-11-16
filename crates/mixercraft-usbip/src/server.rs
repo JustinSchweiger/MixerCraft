@@ -148,6 +148,7 @@ fn urb_loop(sock: TcpStream, inner: &Arc<Inner>, device: &Arc<Device>) -> io::Re
 }
 
 fn read_requests(mut sock: TcpStream, tx: &mpsc::Sender<Msg>, device: &Device) -> io::Result<()> {
+    crate::promote_to_audio_priority();
     let mut hdr = [0u8; 48];
     while !device.removed.load(Ordering::Relaxed) {
         sock.read_exact(&mut hdr)?;
@@ -189,15 +190,33 @@ fn read_requests(mut sock: TcpStream, tx: &mpsc::Sender<Msg>, device: &Device) -
 struct Pending {
     data: Vec<u8>,
     packets: Vec<(u32, u32)>,
-    due: Instant,
+    /// When the first packet's 1 ms frame starts.
+    start: Instant,
+    /// Next packet to move audio for.
+    next: usize,
+    /// Microphones: audio recorded so far for this transfer (interleaved).
+    recorded: Vec<f32>,
+    /// Microphones: frames per packet.
+    frames: Vec<usize>,
 }
 
-/// Answers control transfers at once and completes isochronous transfers
-/// in real time (one 1 ms packet per frame, back to back).
+impl Pending {
+    /// End of packet `k`'s 1 ms frame (when its audio is played / recorded).
+    fn packet_end(&self, k: usize) -> Instant {
+        self.start + Duration::from_millis(k as u64 + 1)
+    }
+}
+
+/// Answers control transfers at once and moves isochronous audio in real
+/// time: one 1 ms packet per frame, back to back, like a USB bus. Audio is
+/// handed to the port packet by packet (not per 10 ms transfer), so the
+/// engine's buffers move in 1 ms steps; a transfer completes after its last
+/// packet.
 struct Writer<'a> {
     sock: TcpStream,
     inner: &'a Inner,
     device: &'a Device,
+    /// (time of the next packet event, transfer seq)
     heap: BinaryHeap<Reverse<(Instant, u32)>>,
     pending: HashMap<u32, Pending>,
     next_due: Option<Instant>,
@@ -220,6 +239,7 @@ impl<'a> Writer<'a> {
     }
 
     fn run(mut self, rx: &Receiver<Msg>) -> io::Result<()> {
+        crate::promote_to_audio_priority();
         loop {
             loop {
                 match rx.try_recv() {
@@ -234,9 +254,7 @@ impl<'a> Writer<'a> {
                     break;
                 }
                 self.heap.pop();
-                if let Some(p) = self.pending.remove(&seq) {
-                    self.complete(seq, &p)?;
-                }
+                self.packet_event(seq)?;
             }
             let wait = self
                 .heap
@@ -272,10 +290,20 @@ impl<'a> Writer<'a> {
                     Some(t) if t + RESYNC >= now => t,
                     _ => now,
                 };
-                let due = start + Duration::from_millis(packets.len() as u64);
-                self.next_due = Some(due);
-                self.heap.push(Reverse((due, seq)));
-                self.pending.insert(seq, Pending { data, packets, due });
+                self.next_due = Some(start + Duration::from_millis(packets.len() as u64));
+                let frames: Vec<usize> =
+                    packets.iter().map(|&(_, len)| FRAMES_PER_MS.min(len as usize / FRAME_BYTES)).collect();
+                let total: usize = frames.iter().sum();
+                let p = Pending {
+                    data,
+                    packets,
+                    start,
+                    next: 0,
+                    recorded: Vec::with_capacity(if expected_in { total * CHANNELS } else { 0 }),
+                    frames,
+                };
+                self.heap.push(Reverse((p.packet_end(0), seq)));
+                self.pending.insert(seq, p);
                 Ok(())
             }
             Msg::Unlink { seq, target } => {
@@ -285,40 +313,60 @@ impl<'a> Writer<'a> {
         }
     }
 
+    /// Moves one packet's audio; completes the transfer after its last one.
+    fn packet_event(&mut self, seq: u32) -> io::Result<()> {
+        let Some(mut p) = self.pending.remove(&seq) else { return Ok(()) }; // unlinked
+        let k = p.next;
+        match self.device.spec.direction {
+            Direction::Speaker => {
+                let (offset, length) = p.packets[k];
+                let bytes = p.data.get(offset as usize..(offset as usize + length as usize)).unwrap_or(&[]);
+                self.samples.clear();
+                self.samples
+                    .extend(bytes.as_chunks::<2>().0.iter().map(|b| f32::from(i16::from_le_bytes(*b)) / 32_768.0));
+                let samples = &self.samples;
+                self.device.with_port(|port| port.played(samples));
+            }
+            Direction::Microphone => {
+                let n = p.frames[k] * CHANNELS;
+                let at = p.recorded.len();
+                p.recorded.resize(at + n, 0.0);
+                let chunk = &mut p.recorded[at..];
+                self.device.with_port(|port| port.record(chunk));
+            }
+        }
+        self.device.host_until.store(self.inner.nanos(p.packet_end(k)), Ordering::Relaxed);
+        p.next += 1;
+        if p.next < p.packets.len() {
+            self.heap.push(Reverse((p.packet_end(p.next), seq)));
+            self.pending.insert(seq, p);
+            Ok(())
+        } else {
+            self.complete(seq, &p)
+        }
+    }
+
     fn complete(&mut self, seq: u32, p: &Pending) -> io::Result<()> {
-        let frame = (self.inner.nanos(p.due) / 1_000_000) as u32;
+        let frame = (self.inner.nanos(p.start) / 1_000_000) as u32;
         let mut iso = Vec::with_capacity(p.packets.len() * 16);
         let reply = match self.device.spec.direction {
             Direction::Speaker => {
-                self.samples.clear();
                 let mut actual = 0u32;
                 for &(offset, length) in &p.packets {
-                    let bytes = p.data.get(offset as usize..(offset as usize + length as usize)).unwrap_or(&[]);
-                    self.samples
-                        .extend(bytes.as_chunks::<2>().0.iter().map(|b| f32::from(i16::from_le_bytes(*b)) / 32_768.0));
                     actual += length;
                     for v in [offset, length, length, 0] {
                         iso.extend_from_slice(&v.to_be_bytes());
                     }
                 }
-                let samples = &self.samples;
-                self.device.with_port(|port| port.played(samples));
                 ret_submit(seq, 0, actual, frame, p.packets.len() as i32, &[], &iso)
             }
             Direction::Microphone => {
-                let frames: Vec<usize> =
-                    p.packets.iter().map(|&(_, len)| FRAMES_PER_MS.min(len as usize / FRAME_BYTES)).collect();
-                let total: usize = frames.iter().sum();
-                self.samples.clear();
-                self.samples.resize(total * CHANNELS, 0.0);
-                let samples = &mut self.samples;
-                self.device.with_port(|port| port.record(samples));
                 self.out.clear();
-                for s in &self.samples {
+                for s in &p.recorded {
                     let v = (s.clamp(-1.0, 1.0) * 32_767.0).round() as i16;
                     self.out.extend_from_slice(&v.to_le_bytes());
                 }
-                for (&(offset, length), n) in p.packets.iter().zip(&frames) {
+                for (&(offset, length), n) in p.packets.iter().zip(&p.frames) {
                     for v in [offset, length, (n * FRAME_BYTES) as u32, 0] {
                         iso.extend_from_slice(&v.to_be_bytes());
                     }
@@ -326,7 +374,6 @@ impl<'a> Writer<'a> {
                 ret_submit(seq, 0, self.out.len() as u32, frame, p.packets.len() as i32, &self.out, &iso)
             }
         };
-        self.device.host_until.store(self.inner.nanos(p.due), Ordering::Relaxed);
         self.sock.write_all(&reply)
     }
 }

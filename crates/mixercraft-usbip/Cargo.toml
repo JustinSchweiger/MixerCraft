@@ -10,6 +10,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+audio_thread_priority.workspace = true
 
 [lints]
 workspace = true

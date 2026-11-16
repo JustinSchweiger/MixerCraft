@@ -13,6 +13,15 @@ All notable changes to this project are documented here. The format follows
   automatically.
 
 ### Fixed
+- Crackling and short hangs during CPU spikes: audio threads now run in the
+  operating system's real-time audio class (MMCSS "Audio" on Windows): cpal's
+  device callbacks (`realtime` feature), the software clock and the virtual
+  devices' USB/IP threads. Virtual devices also move audio per 1 ms packet
+  instead of per 10 ms transfer, so the engine's buffers no longer see 10 ms
+  jumps or overlapping silence after a late transfer. Under full load on all
+  12 cores the app-to-app round trip through two virtual devices stayed at
+  86–154 ms (before: up to 420 ms) with at most one engine underrun per run
+  (before: up to 13 gaps and 51 xruns).
 - The default-device guard only undoes Windows switching to a newly
   appeared virtual device; it no longer overrides a virtual device the user
   chose as default when that device returns after an engine restart.
