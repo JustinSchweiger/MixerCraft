@@ -9,6 +9,9 @@ All notable changes to this project are documented here. The format follows
 ### Fixed
 - FIFO latency now recovers after stalls instead of staying raised forever;
   latency raises and recoveries appear in the engine's recovery log.
+- Device streams get a 1 s startup grace: early shortfalls re-prime without
+  counting as underruns or raising latency, and startup buffer sizing no
+  longer causes a seconds-long pitch correction.
 
 ### Added
 - Real-time audio core: planar buffers, click-free gain smoothing, lock-free
