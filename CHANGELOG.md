@@ -8,6 +8,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 - Minimum supported Rust version is now 1.95 (required by Slint).
+- Configuration schema 2 (per-strip `fx`); schema 1 files are migrated
+  automatically.
 
 ### Fixed
 - A second engine start now reports "already running" instead of a Windows
@@ -19,6 +21,9 @@ All notable changes to this project are documented here. The format follows
   longer causes a seconds-long pitch correction.
 
 ### Added
+- Per-strip gate, compressor (one "amount" control) and 3-band EQ in the
+  engine, before the fader; bit-exact when off; configurable from the GUI
+  (rotary knobs), the CLI (`mixercraft fx`) and the configuration file.
 - Desktop mixer window `mixercraft-gui` (Slint): input strips and output
   buses with pill faders, LED meters with peak hold, routing, mute and solo
   buttons; diagnostics tab; starts the engine when it isn't running;

@@ -65,6 +65,8 @@ pub enum Request {
     SetBusGain { bus: u16, db: f32 },
     /// Mutes or unmutes a bus.
     SetBusMute { bus: u16, mute: bool },
+    /// Sets a strip's gate, EQ and compressor.
+    SetStripFx { strip: u16, fx: StripFx },
     /// Asks the engine to stop gracefully.
     Shutdown,
 }
@@ -191,6 +193,30 @@ pub struct StripStatus {
     pub solo: bool,
     /// Indices of the buses this strip feeds.
     pub routes: Vec<u16>,
+    /// Gate, EQ and compressor settings.
+    pub fx: StripFx,
+}
+
+/// Gate, EQ and compressor settings of a strip.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StripFx {
+    /// Gate threshold in dBFS; -80 or below means off. Up to -10.
+    pub gate_threshold_db: f32,
+    /// Compressor amount, 0 (off) to 10.
+    pub comp_amount: f32,
+    /// Low shelf gain (dB, ±12).
+    pub eq_low_db: f32,
+    /// Mid peak gain (dB, ±12).
+    pub eq_mid_db: f32,
+    /// High shelf gain (dB, ±12).
+    pub eq_high_db: f32,
+}
+
+impl Default for StripFx {
+    fn default() -> Self {
+        Self { gate_threshold_db: -80.0, comp_amount: 0.0, eq_low_db: 0.0, eq_mid_db: 0.0, eq_high_db: 0.0 }
+    }
 }
 
 /// Mixer state of one bus.

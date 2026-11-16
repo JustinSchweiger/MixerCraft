@@ -28,6 +28,7 @@ pub mod drift;
 pub mod dsp;
 pub mod engine;
 pub mod fifo;
+pub mod fx;
 pub mod meter;
 pub mod mixer;
 pub mod resampler;

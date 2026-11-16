@@ -24,7 +24,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// The schema version written by this build.
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+
+/// Gate thresholds at or below this mean "gate off" (mirrors the engine).
+pub const GATE_OFF_DB: f32 = -80.0;
 
 /// Maximum channels per strip or bus (mirrors the engine limit).
 pub const MAX_CHANNELS: u8 = 8;
@@ -184,6 +187,51 @@ pub struct StripConfig {
     /// Ids of the buses this strip feeds.
     #[serde(default)]
     pub routes: Vec<String>,
+    /// Gate, EQ and compressor (schema 2).
+    #[serde(default, skip_serializing_if = "FxConfig::is_off")]
+    pub fx: FxConfig,
+}
+
+/// Per-strip processing settings (schema 2).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FxConfig {
+    /// Gate threshold (dBFS); at or below -80 the gate is off. Up to -10.
+    pub gate_threshold_db: f32,
+    /// Compressor amount, 0 (off) to 10.
+    pub comp_amount: f32,
+    /// Low shelf gain (dB, ±12).
+    pub eq_low_db: f32,
+    /// Mid peak gain (dB, ±12).
+    pub eq_mid_db: f32,
+    /// High shelf gain (dB, ±12).
+    pub eq_high_db: f32,
+}
+
+impl Default for FxConfig {
+    fn default() -> Self {
+        Self { gate_threshold_db: GATE_OFF_DB, comp_amount: 0.0, eq_low_db: 0.0, eq_mid_db: 0.0, eq_high_db: 0.0 }
+    }
+}
+
+impl FxConfig {
+    /// Whether all processing is off (not written to the file then).
+    #[must_use]
+    pub fn is_off(&self) -> bool {
+        *self == Self::default()
+    }
+
+    fn validate(&self, owner: &str) -> Result<(), ConfigError> {
+        let ok = |v: f32, lo: f32, hi: f32| v.is_finite() && (lo..=hi).contains(&v);
+        if ok(self.gate_threshold_db, -200.0, -10.0)
+            && ok(self.comp_amount, 0.0, 10.0)
+            && [self.eq_low_db, self.eq_mid_db, self.eq_high_db].iter().all(|g| ok(*g, -12.0, 12.0))
+        {
+            Ok(())
+        } else {
+            Err(ConfigError::Invalid(format!("'{owner}' has processing settings out of range")))
+        }
+    }
 }
 
 /// An output bus.
@@ -245,6 +293,7 @@ impl Default for Config {
                 mute: false,
                 solo: false,
                 routes: Vec::new(),
+                fx: FxConfig::default(),
             }],
             buses: vec![BusConfig {
                 id: "A1".into(),
@@ -305,6 +354,7 @@ impl Config {
         for s in &self.strips {
             check_channels(s.channels, &s.name)?;
             check_gain(s.gain_db, &s.name)?;
+            s.fx.validate(&s.name)?;
             if let Some(r) = s.routes.iter().find(|r| !ids.contains(r.as_str())) {
                 return invalid(format!("strip '{}' routes to unknown bus '{r}'", s.name));
             }
@@ -359,11 +409,18 @@ pub fn migrate(doc: toml::Table) -> Result<toml::Table, ConfigError> {
     match version {
         0 => Err(ConfigError::MissingVersion),
         v if v > CURRENT_SCHEMA_VERSION => Err(ConfigError::TooNew { found: v, supported: CURRENT_SCHEMA_VERSION }),
-        // Schema 1 is the first released schema. Each future schema change
-        // adds one arm that upgrades a single step and recurses, e.g.
-        //   1 => migrate(migrate_1_to_2(doc)?),
+        // Each schema change adds one arm that upgrades a single step and
+        // recurses, so every historical document has a tested path.
+        1 => migrate(migrate_1_to_2(doc)),
         _ => Ok(doc),
     }
+}
+
+/// Schema 2 added optional per-strip `fx` tables; their absence means "off",
+/// so the upgrade only bumps the version.
+fn migrate_1_to_2(mut doc: toml::Table) -> toml::Table {
+    doc.insert("schema_version".into(), toml::Value::Integer(2));
+    doc
 }
 
 /// Parses, migrates and validates a configuration document.
@@ -488,6 +545,29 @@ name = "Stream"
         assert_eq!(c, again);
         let d = Config::default();
         assert_eq!(load_str(&d.to_toml().unwrap()).unwrap(), d);
+    }
+
+    #[test]
+    fn schema_1_documents_migrate_to_schema_2() {
+        assert!(EXAMPLE.contains("schema_version = 1"));
+        let c = load_str(EXAMPLE).unwrap();
+        assert_eq!(c.schema_version, 2);
+        assert!(c.strips.iter().all(|s| s.fx.is_off()));
+        let saved = c.to_toml().unwrap();
+        assert!(saved.contains("schema_version = 2"));
+        assert!(!saved.contains("[strips.fx]"), "default processing is not written");
+    }
+
+    #[test]
+    fn strip_fx_roundtrip_and_validation() {
+        let mut c = load_str(EXAMPLE).unwrap();
+        c.strips[0].fx =
+            FxConfig { gate_threshold_db: -45.0, comp_amount: 4.5, eq_low_db: 2.0, eq_mid_db: -1.5, eq_high_db: 3.0 };
+        let text = c.to_toml().unwrap();
+        assert!(text.contains("[strips.fx]"));
+        assert_eq!(load_str(&text).unwrap(), c);
+        let bad = text.replace("comp_amount = 4.5", "comp_amount = 40.0");
+        assert!(matches!(load_str(&bad), Err(ConfigError::Invalid(_))));
     }
 
     #[test]
