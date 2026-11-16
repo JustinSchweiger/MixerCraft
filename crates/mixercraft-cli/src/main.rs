@@ -210,11 +210,16 @@ fn main() -> anyhow::Result<()> {
             fx.eq_mid_db = mid.unwrap_or(fx.eq_mid_db);
             fx.eq_high_db = high.unwrap_or(fx.eq_high_db);
             if let Some(d) = denoise {
-                if d == OnOff::On && !s.noise_suppression_available {
-                    anyhow::bail!(
+                match (d, s.noise_suppression_available) {
+                    (OnOff::On, None) => anyhow::bail!(
+                        "the running engine is older than this mixercraft and has no noise suppression; \
+                         restart it (`mixercraft shutdown`, then start mixercraftd or the app)"
+                    ),
+                    (OnOff::On, Some(false)) => anyhow::bail!(
                         "noise suppression needs the engine to run at 48 kHz (it runs at {} Hz)",
                         s.sample_rate
-                    );
+                    ),
+                    _ => {}
                 }
                 fx.noise_suppression = d.into();
             }

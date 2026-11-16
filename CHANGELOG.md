@@ -13,6 +13,16 @@ All notable changes to this project are documented here. The format follows
   automatically.
 
 ### Fixed
+- Windows default devices that the user gave to MixerCraft virtual devices
+  (e.g. "Desktop Input" as default output) come back after an engine
+  restart: the engine remembers them in `virtual-defaults.txt` next to the
+  configuration and restores each once its device reappears; choosing
+  another device while the virtual one is present forgets it. The guard
+  against Windows' own switch to a brand-new device now lasts 6 s (was 15 s),
+  so a deliberate choice right after a device appears is no longer undone.
+- The desktop app no longer claims "noise suppression needs 48 kHz" when the
+  running engine is simply older than the app (an engine started before an
+  update keeps running); it says the engine needs a restart instead.
 - Crackling and short hangs during CPU spikes: audio threads now run in the
   operating system's real-time audio class (MMCSS "Audio" on Windows): cpal's
   device callbacks (`realtime` feature), the software clock and the virtual

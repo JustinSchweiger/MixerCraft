@@ -250,6 +250,9 @@ impl Supervisor {
     pub fn new(config: Config, config_path: Option<PathBuf>, process_start: Instant) -> anyhow::Result<Self> {
         let audio = AudioSystem::new();
         info!(backend = %audio.backend_name(), "audio backend selected");
+        if let Some(path) = &config_path {
+            audio.set_virtual_memory_file(path.with_file_name("virtual-defaults.txt"));
+        }
         let master_bus = config.master_bus_index();
         let request = Self::request(&config, config.engine.sample_rate);
 
@@ -1253,7 +1256,7 @@ impl Supervisor {
             last_error: self.last_error.clone(),
             virtual_devices: self.audio.virtual_devices_available().is_ok(),
             virtual_devices_note: self.audio.virtual_devices_available().err().unwrap_or_default(),
-            noise_suppression_available: self.sample_rate == mixercraft_core::denoise::DENOISE_RATE,
+            noise_suppression_available: Some(self.sample_rate == mixercraft_core::denoise::DENOISE_RATE),
         }
     }
 }

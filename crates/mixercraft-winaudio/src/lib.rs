@@ -52,7 +52,7 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// Data flow of an endpoint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Flow {
     /// Playback.
     Render,
@@ -61,7 +61,7 @@ pub enum Flow {
 }
 
 /// Windows' three default-device roles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
     /// Games and system sounds.
     Console,
@@ -161,6 +161,15 @@ pub fn restore_where(saved: &Defaults, undo: impl Fn(&str) -> bool) -> Result<us
         }
     }
     Ok(changed)
+}
+
+/// Makes endpoint `id` the default for `role` (its flow is implied by the
+/// endpoint).
+///
+/// # Errors
+/// COM failures, or [`Error::Unsupported`] off Windows.
+pub fn set_default(id: &str, role: Role) -> Result<(), Error> {
+    imp::set_default(id, role)
 }
 
 /// Ids of every endpoint Windows knows, including unplugged and disabled

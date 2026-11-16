@@ -170,7 +170,9 @@ pub struct EngineStatus {
     /// Why virtual devices are unavailable (empty when they are).
     pub virtual_devices_note: String,
     /// Strip noise suppression works at the current engine rate (48 kHz).
-    pub noise_suppression_available: bool,
+    /// `None`: the engine predates noise suppression (an older engine still
+    /// running after an update).
+    pub noise_suppression_available: Option<bool>,
 }
 
 /// State of one opened device stream.
@@ -652,6 +654,13 @@ mod tests {
         let Response::Status(s) = r else { panic!() };
         assert_eq!(s.sample_rate, 48_000);
         assert_eq!(s.state, EngineState::Starting);
+        // An engine from before noise suppression is recognisable as such.
+        assert_eq!(s.noise_suppression_available, None);
+        let r: Response =
+            serde_json::from_str(r#"{"type":"status","sample_rate":48000,"noise_suppression_available":true}"#)
+                .unwrap();
+        let Response::Status(s) = r else { panic!() };
+        assert_eq!(s.noise_suppression_available, Some(true));
     }
 
     #[test]
