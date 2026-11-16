@@ -14,6 +14,9 @@ pub struct FifoStats {
     pub(crate) ppm_milli: AtomicI64,
     pub(crate) writes: AtomicU64,
     pub(crate) reads: AtomicU64,
+    /// Largest writer block since the reader last looked (swapped to 0).
+    pub(crate) write_peak: AtomicU32,
+    /// Largest writer block within the reader's sliding window.
     pub(crate) max_write_frames: AtomicU32,
 }
 
@@ -37,7 +40,8 @@ pub struct FifoSnapshot {
     pub writes: u64,
     /// Number of read calls (progress indicator of the reader side).
     pub reads: u64,
-    /// Largest block the writer delivered in one call (frames).
+    /// Largest block the writer delivered in one call during the last
+    /// 30–60 seconds (frames).
     pub max_write_frames: u32,
 }
 
