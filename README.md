@@ -49,7 +49,7 @@ and keeps running cleanly for days.
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/settings.png" alt="Settings tab"><br><sub><b>Settings</b>: sign-in start, window behaviour, sample rate, latency and clock</sub></td>
+    <td width="50%"><img src="docs/images/settings.png" alt="Settings tab"><br><sub><b>Settings</b>: sign-in start, window behaviour, sample rate and latency</sub></td>
     <td width="50%"><img src="docs/images/about.png" alt="About tab with update check"><br><sub><b>Updates</b>: checked on start and daily, installed on your click</sub></td>
   </tr>
   <tr>
