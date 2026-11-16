@@ -63,6 +63,9 @@ First release: Windows installer on
   automatically.
 
 ### Fixed
+- Diagnostics tab: the recovery log lists its events one compact line each
+  at the top of the panel (scrolling when long) instead of spreading a few
+  events across the whole panel height.
 - Windows default devices that the user gave to MixerCraft virtual devices
   (e.g. "Desktop Input" as default output) come back after an engine
   restart: the engine remembers them in `virtual-defaults.txt` next to the
