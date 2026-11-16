@@ -12,7 +12,7 @@ mind is a new record that supersedes the old one.
 | [0004](0004-ipc-protocol.md) | Versioned NDJSON IPC over local sockets | Accepted |
 | [0005](0005-gui-framework.md) | GUI framework | Proposed |
 | [0006](0006-distribution-and-updates.md) | Distribution and update architecture | Proposed |
-| [0007](0007-windows-driver-signing.md) | Windows virtual driver signing | Proposed — owner decision needed |
-| [0008](0008-license.md) | Project license | Proposed — owner decision needed |
+| [0007](0007-windows-driver-signing.md) | Windows virtual endpoints and driver signing | Proposed — zero-cost path |
+| [0008](0008-license.md) | Project license (MIT OR Apache-2.0) | Accepted |
 
 Template: copy an existing record, keep it short, link evidence.

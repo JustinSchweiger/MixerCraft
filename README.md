@@ -73,4 +73,4 @@ See `mixercraft --help` for routing, mute, solo and meters.
 ## License
 
 Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE) at your
-option (pending confirmation, see [ADR 0008](docs/adr/0008-license.md)).
+option (see [ADR 0008](docs/adr/0008-license.md)).
