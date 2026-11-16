@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/mixercraft-core",
     "crates/mixercraft-config",
+    "crates/mixercraft-ipc",
 ]
 
 [workspace.package]
