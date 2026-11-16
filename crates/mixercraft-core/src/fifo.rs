@@ -28,7 +28,9 @@
 //! * **latency recovery** – after [`SHRINK_AFTER_SECONDS`] without any
 //!   underrun, overrun or target increase, the target steps back down by
 //!   1 ms every [`SHRINK_INTERVAL_SECONDS`] until it reaches the larger of
-//!   the configured target and the measured block requirement. The steps are
+//!   the configured target and the largest block requirement seen during
+//!   the whole quiet period (so occasional large blocks are respected and
+//!   the target cannot oscillate). The steps are
 //!   small enough that the drift controller absorbs them with a correction of
 //!   a few hundred ppm (well below audibility) instead of dropping audio;
 //! * **warm-up** – device streams often deliver irregular bursts right after
@@ -123,6 +125,7 @@ pub fn fifo(spec: FifoSpec) -> (FifoWriter, FifoReader) {
         window_len: seconds(spec.reader_rate, BLOCK_WINDOW_SECONDS),
         window_left: seconds(spec.reader_rate, BLOCK_WINDOW_SECONDS),
         quiet_frames: 0,
+        quiet_peak: 0,
         shrink_after: seconds(spec.reader_rate, SHRINK_AFTER_SECONDS),
         shrink_interval: seconds(spec.reader_rate, SHRINK_INTERVAL_SECONDS),
         shrink_countdown: 0,
@@ -218,6 +221,10 @@ pub struct FifoReader {
     window_left: u64,
     /// Reader frames since the last underrun, overrun or target increase.
     quiet_frames: u64,
+    /// Largest writer block since the quiet period began. Recovery never
+    /// shrinks below what the devices have needed during the whole period,
+    /// so occasional large blocks cannot cause a shrink/raise oscillation.
+    quiet_peak: u32,
     shrink_after: u64,
     shrink_interval: u64,
     shrink_countdown: u64,
@@ -264,14 +271,15 @@ impl FifoReader {
         // The FIFO must hold at least one writer block plus one reader
         // block, or it underruns by construction.
         let recent_write = self.track_writer_blocks(frames as u64);
-        let need = recent_write + (frames as f64 * self.to_writer_frames).ceil() as usize;
+        let read_w = (frames as f64 * self.to_writer_frames).ceil() as usize;
+        let need = recent_write + read_w;
         if !warming_up {
             if need > self.target && self.target < self.max_target {
                 self.set_target(need.min(self.max_target));
                 self.primed = false; // re-prime once to the new margin
-                self.quiet_frames = 0;
+                self.reset_quiet();
             } else {
-                self.recover_latency(frames as u64, need);
+                self.recover_latency(frames as u64, read_w);
             }
         }
 
@@ -293,7 +301,7 @@ impl FifoReader {
             let excess = (total as usize).saturating_sub(self.target);
             self.stats.overruns.fetch_add(1, Ordering::Relaxed);
             self.stats.dropped_frames.fetch_add(excess as u64, Ordering::Relaxed);
-            self.quiet_frames = 0;
+            self.reset_quiet();
             self.resampler.reset();
             self.discard(ring.saturating_sub(self.target));
             self.drift.reset_measurement();
@@ -338,7 +346,7 @@ impl FifoReader {
                 return ReadOutcome::Priming;
             }
             self.stats.underruns.fetch_add(1, Ordering::Relaxed);
-            self.quiet_frames = 0;
+            self.reset_quiet();
             // Adaptive latency: grow the safety margin by 50 %, bounded.
             self.set_target((self.target + self.target / 2).min(self.max_target));
             return ReadOutcome::Underrun;
@@ -351,6 +359,7 @@ impl FifoReader {
     fn track_writer_blocks(&mut self, frames: u64) -> usize {
         let peak = self.stats.write_peak.swap(0, Ordering::Relaxed);
         self.block_window[0] = self.block_window[0].max(peak);
+        self.quiet_peak = self.quiet_peak.max(peak);
         if frames >= self.window_left {
             self.block_window = [0, self.block_window[0]];
             self.window_left = self.window_len;
@@ -362,9 +371,16 @@ impl FifoReader {
         recent as usize
     }
 
+    fn reset_quiet(&mut self) {
+        self.quiet_frames = 0;
+        self.quiet_peak = 0;
+    }
+
     /// Steps a raised target back down after a long glitch-free period.
-    fn recover_latency(&mut self, frames: u64, need: usize) {
+    /// `read_w` is the reader block in writer frames.
+    fn recover_latency(&mut self, frames: u64, read_w: usize) {
         self.quiet_frames = self.quiet_frames.saturating_add(frames);
+        let need = self.quiet_peak as usize + read_w;
         let floor = self.base_target.max(need).min(self.max_target);
         if self.quiet_frames < self.shrink_after || self.target <= floor {
             self.shrink_countdown = 0;
@@ -576,6 +592,38 @@ mod tests {
         assert_eq!(bad_reads, 0, "no glitches while recovering");
         assert_eq!(s.underruns + s.overruns, glitches_after_stall, "no new xruns");
         assert!(max_ppm < 350.0, "shrinking stays inaudible: {max_ppm:.0} ppm");
+    }
+
+    /// Found on hardware: a master device that occasionally delivers double
+    /// periods makes the output FIFO genuinely need 960 + 480 frames. The
+    /// target must not shrink below that between occurrences (each raise
+    /// re-primes, i.e. briefly drops audio).
+    #[test]
+    fn occasional_large_blocks_do_not_cause_oscillation() {
+        let spec = FifoSpec::new(1, 48_000, 48_000, 15.0);
+        let (mut w, mut r) = fifo(spec);
+        let small = vec![0.1f32; 480];
+        let large = vec![0.1f32; 960];
+        let mut out = vec![0.0f32; 480];
+        let mut primings_after_settle = 0;
+        // 15 minutes; a double block replaces two single ones every 100 s.
+        let mut i = 0;
+        while i < 15 * 60 * 100 {
+            if i % 10_000 == 5_000 {
+                w.write(&large);
+                r.read(&mut out);
+                i += 1;
+            } else {
+                w.write(&small);
+            }
+            if r.read(&mut out) == ReadOutcome::Priming && i > 6_000 {
+                primings_after_settle += 1;
+            }
+            i += 1;
+        }
+        assert_eq!(r.target_frames(), 1440, "needs one double block plus one read");
+        assert_eq!(primings_after_settle, 0, "no re-prime gaps from oscillation");
+        assert_eq!(r.stats().snapshot().underruns, 0);
     }
 
     #[test]
