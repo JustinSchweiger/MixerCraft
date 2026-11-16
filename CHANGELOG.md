@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Settings tab in the desktop app:
+  - Startup (Windows): open MixerCraft hidden in the tray when you sign in
+    (a second Task Scheduler task, "MixerCraft", running the app with
+    `--tray`; the app starts the engine), or start only the engine at
+    sign-in (the existing "MixerCraft Engine" task). Shows the current state.
+  - Window: the close button hides to the tray or quits the app (audio keeps
+    running either way); peak-hold markers on the meters on or off. Stored in
+    `gui.toml` next to the engine configuration.
+  - Audio engine: sample rate (44.1 or 48 kHz), latency profile and the clock
+    (master) bus. They are saved to the configuration at once and apply when
+    the engine restarts; the tab says when a restart is needed and has a
+    Restart engine button (stops the engine, waits for it to exit, starts it
+    with the same configuration file). Shows the configuration file.
+  - Virtual devices: whether they are available, with a link to usbip-win2
+    when it is missing.
+- IPC (protocol v1, additive): `set_engine_settings` request; status reports
+  the configured `settings`, `restart_required` and `config_path`.
+
 ### Changed
 - Minimum supported Rust version is now 1.95 (required by Slint).
 - Configuration schema 3 (schema 2 added per-strip `fx`; schema 3 adds

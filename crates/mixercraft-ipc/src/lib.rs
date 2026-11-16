@@ -85,6 +85,9 @@ pub enum Request {
     RenameBus { bus: u16, name: String },
     /// Sets a bus's keep-awake tone (keeps auto-standby speakers on).
     SetBusKeepAwake { bus: u16, keep_awake: KeepAwake },
+    /// Stores engine-wide settings in the configuration. They take effect
+    /// when the engine restarts ([`EngineStatus::restart_required`]).
+    SetEngineSettings { settings: EngineSettings },
     /// Asks the engine to stop gracefully.
     Shutdown,
 }
@@ -173,6 +176,13 @@ pub struct EngineStatus {
     /// `None`: the engine predates noise suppression (an older engine still
     /// running after an update).
     pub noise_suppression_available: Option<bool>,
+    /// Engine-wide settings as configured (they apply at the next start).
+    /// `None`: the engine predates settings over IPC.
+    pub settings: Option<EngineSettings>,
+    /// The configured settings differ from those the engine started with.
+    pub restart_required: bool,
+    /// The configuration file the engine loads and saves (empty if none).
+    pub config_path: String,
 }
 
 /// State of one opened device stream.
@@ -236,6 +246,39 @@ pub enum DeviceChoice {
     Default,
     /// A specific device, matched by id first, then by name.
     Device { id: Option<String>, name: Option<String> },
+}
+
+/// How much latency the engine trades for robustness (the configuration's
+/// `latency_profile`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum LatencyProfile {
+    /// Smallest buffers; may glitch on busy systems.
+    LowLatency,
+    /// Comfortably glitch-free on typical systems.
+    #[default]
+    Balanced,
+    /// Large safety margins for heavily loaded or unusual systems.
+    MaxStability,
+}
+
+/// Engine-wide settings that apply when the engine starts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EngineSettings {
+    /// Preferred engine sample rate (Hz). The master device runs at it if it
+    /// supports it; otherwise the device's own rate wins.
+    pub sample_rate: u32,
+    pub latency_profile: LatencyProfile,
+    /// Id of the bus whose device clocks the engine; `None` = the first bus
+    /// with a device.
+    pub master_bus: Option<String>,
+}
+
+impl Default for EngineSettings {
+    fn default() -> Self {
+        Self { sample_rate: 48_000, latency_profile: LatencyProfile::default(), master_bus: None }
+    }
 }
 
 /// Keep-awake tone of a bus: after 10 s of silence a quiet infrasonic sine
@@ -643,6 +686,16 @@ mod tests {
         assert_eq!(json, r#"{"type":"set_route","strip":1,"bus":2,"enabled":true}"#);
         let json = serde_json::to_string(&Request::Status).unwrap();
         assert_eq!(json, r#"{"type":"status"}"#);
+        let settings = EngineSettings {
+            sample_rate: 44_100,
+            latency_profile: LatencyProfile::MaxStability,
+            master_bus: Some("A2".into()),
+        };
+        let json = serde_json::to_string(&Request::SetEngineSettings { settings }).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"set_engine_settings","settings":{"sample_rate":44100,"latency_profile":"max-stability","master_bus":"A2"}}"#
+        );
     }
 
     #[test]
@@ -661,6 +714,9 @@ mod tests {
                 .unwrap();
         let Response::Status(s) = r else { panic!() };
         assert_eq!(s.noise_suppression_available, Some(true));
+        // Engines before the settings fields are recognisable.
+        assert_eq!(s.settings, None);
+        assert!(!s.restart_required);
     }
 
     #[test]

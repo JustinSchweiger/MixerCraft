@@ -11,7 +11,7 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 | 4b | Native WASAPI (IAudioClient3, MMCSS), PipeWire graph node | 🗓 |
 | 5 | Virtual devices | 🗓 blocked on Windows by driver signing ([ADR 0007](adr/0007-windows-driver-signing.md)); Linux and macOS can start |
 | 6 | Background engine and recovery | 🟡 done: IPC, single instance, recovery state machine, watchdog, software clock fallback, diagnostics, config persistence, latency recovery, per-user autostart (Windows verified except an actual sign-in), log files, console-less engine. Missing: device-arrival notifications, sleep/resume tests, Windows service mode for pre-login start |
-| 7 | Production GUI | 🟡 Slint mixer window connected to the engine (faders, mute/solo, routing, LED meters, gate/comp/EQ knobs, diagnostics, engine start), tray icon. Next: global hotkeys, settings |
+| 7 | Production GUI | 🟡 Slint mixer window connected to the engine (faders, mute/solo, routing, LED meters, gate/comp/EQ knobs, diagnostics, engine start), tray icon, Settings tab (sign-in start, close button, peak hold, engine rate/latency/clock with restart, virtual-device status). Next: global hotkeys |
 | 8 | Packaging and release pipeline | 🗓 ([ADR 0006](adr/0006-distribution-and-updates.md)) |
 | 9 | Automatic updates | 🗓 |
 | 10 | Hardening: long soak tests, self-hosted hardware runners | 🗓 |
@@ -27,7 +27,7 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 4. Per-application capture on Windows (WASAPI process loopback) as an
    input source. Virtual devices: soak test, reboot/sleep behaviour, own
    USB product id.
-5. GUI: global hotkeys; Linux tray (KSNI); GUI autostart with `--tray`; settings tab.
+5. GUI: global hotkeys; Linux tray (KSNI); verify the sign-in toggles of the Settings tab at an actual sign-in.
 6. Native WASAPI backend for low latency.
 7. macOS HAL plug-in; Windows driver once signing is arranged.
 
@@ -48,6 +48,7 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 | 2026-11-16 | same | stress test: master on the USB speakers with nothing routed; click test app → virtual "Game" → strip → bus → virtual "Chat" → app; 12 normal-priority busy loops for 20 s | Before (normal-priority threads): +2…13 gaps, +5…51 xruns, 26–46 of ~47 clicks, round trip avg 172–284 ms, up to 420 ms. After MMCSS for all audio threads and 1 ms packet pacing (4 runs): 0–3 gaps (one underrun on the virtual input per run, at stream start / load onset), 0–1 xruns, 40–47 clicks, avg 90–104 ms, max 154 ms. The recording app still saw Windows-side capture glitches on the virtual microphone in one run under this full load. |
 | 2026-11-16 | same | isolated test engine (virtual devices only, nothing audible) | Keep-awake, recorded by loopback from the virtual speaker it plays into: silent for ~10 s after being enabled, then a steady 15.0 Hz tone at -45.0 dBFS. Through a virtual *microphone* the tone was distorted by Windows capture processing (low cut, automatic gain), so capture endpoints are no measurement path. Noise suppression, speech-like bursts plus noise played into a strip and recorded by loopback: noise floor -39.2 → -69.6/-70.0 dBFS (two runs), speech -17.6 → -17.7 dBFS. Release build: cycle load 0.5–0.7 % → 1.3–1.9 % with one stereo strip denoised; engine process 3.4 % of one core. Another session was running a CPU stress test at the same time. |
 | 2026-11-16 | same | default-device memory (isolated engine, virtual recording device, communications role only) | Chosen as communications default → remembered; engine stopped → Windows fell back to the Scarlett; engine restarted → the virtual device was the default again; Scarlett chosen while the device was present → forgotten; next restart kept the Scarlett. The owner's defaults were unchanged afterwards. |
+| 2026-11-16 | same | Settings tab, isolated debug GUI and engine (no devices: one input with no source, two meter-only buses) | Sample rate, latency and clock-bus changes were saved to the configuration at once and showed the restart banner; Restart engine stopped the engine, waited for it to exit and started it with the same `--config`: it then ran at 44.1 kHz with max-stability and A2 as clock, banner gone. Close button set to "Quit the app" closed only the window (engine kept running); `gui.toml` held both preferences. Sign-in toggles showed "off" matching Task Scheduler; switching them was not exercised (it would register real logon tasks). |
 
 ## Known limitations found in testing
 
