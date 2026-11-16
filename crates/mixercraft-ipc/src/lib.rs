@@ -67,6 +67,22 @@ pub enum Request {
     SetBusMute { bus: u16, mute: bool },
     /// Sets a strip's gate, EQ and compressor.
     SetStripFx { strip: u16, fx: StripFx },
+    /// Chooses the capture device feeding a strip.
+    SetStripSource { strip: u16, choice: DeviceChoice },
+    /// Chooses the playback device a bus feeds.
+    SetBusSink { bus: u16, choice: DeviceChoice },
+    /// Appends an input strip (no device, not routed).
+    AddStrip { name: String },
+    /// Appends an output bus (no device) with a new id such as `A3`.
+    AddBus { name: String },
+    /// Removes a strip; later strips move down by one.
+    RemoveStrip { strip: u16 },
+    /// Removes a bus (not the master bus); later buses move down by one.
+    RemoveBus { bus: u16 },
+    /// Renames a strip.
+    RenameStrip { strip: u16, name: String },
+    /// Renames a bus (its id stays).
+    RenameBus { bus: u16, name: String },
     /// Asks the engine to stop gracefully.
     Shutdown,
 }
@@ -195,6 +211,21 @@ pub struct StripStatus {
     pub routes: Vec<u16>,
     /// Gate, EQ and compressor settings.
     pub fx: StripFx,
+    /// The configured source device.
+    pub source_choice: DeviceChoice,
+}
+
+/// Which device a strip or bus uses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DeviceChoice {
+    /// No device.
+    #[default]
+    None,
+    /// The system default device (input for strips, output for buses).
+    Default,
+    /// A specific device, matched by id first, then by name.
+    Device { id: Option<String>, name: Option<String> },
 }
 
 /// Gate, EQ and compressor settings of a strip.
@@ -229,6 +260,10 @@ pub struct BusStatus {
     pub channels: u8,
     pub gain_db: f32,
     pub mute: bool,
+    /// The configured output device.
+    pub sink_choice: DeviceChoice,
+    /// This bus clocks the engine (it cannot be removed).
+    pub master: bool,
 }
 
 /// One entry in the recovery log.

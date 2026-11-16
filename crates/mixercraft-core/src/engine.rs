@@ -53,6 +53,11 @@ pub enum Command {
     ReplaceMixer(Box<Mixer>),
     /// Selects which bus is rendered by [`EngineCore::render_master`].
     SetMasterBus(Option<usize>),
+    /// Swaps in a mixer with strips or buses added or removed, in one step.
+    /// `remove_input` / `remove_output` name a strip / bus index that was
+    /// removed: its FIFO is detached and the FIFOs (and master bus) after it
+    /// move down by one, matching the new mixer's indices.
+    Reshape { mixer: Box<Mixer>, remove_input: Option<usize>, remove_output: Option<usize> },
 }
 
 /// Objects handed back from the audio thread for deallocation.
@@ -281,6 +286,29 @@ impl EngineCore {
                     self.master_bus = bus;
                     true
                 }
+                Command::Reshape { mut mixer, remove_input, remove_output } => {
+                    std::mem::swap(&mut self.mixer, &mut mixer);
+                    self.dispose(Garbage::Mixer(mixer));
+                    if let Some(i) = remove_input.filter(|&i| i < self.inputs.len()) {
+                        if let Some(old) = self.inputs[i].take() {
+                            self.dispose(Garbage::Reader(old));
+                        }
+                        // Moves the now empty slot to the end (no allocation).
+                        self.inputs[i..].rotate_left(1);
+                    }
+                    if let Some(b) = remove_output.filter(|&b| b < self.outputs.len()) {
+                        if let Some(old) = self.outputs[b].take() {
+                            self.dispose(Garbage::Writer(old));
+                        }
+                        self.outputs[b..].rotate_left(1);
+                        self.master_bus = match self.master_bus {
+                            Some(m) if m == b => None,
+                            Some(m) if m > b => Some(m - 1),
+                            m => m,
+                        };
+                    }
+                    true
+                }
             };
             let counter = if ok { &self.stats.commands_applied } else { &self.stats.commands_rejected };
             counter.fetch_add(1, Ordering::Relaxed);
@@ -363,6 +391,50 @@ mod tests {
         assert_eq!(snap.commands_applied, 3);
         assert_eq!(snap.commands_rejected, 1);
         assert_eq!(snap.rt_deallocations, 0);
+    }
+
+    #[test]
+    fn reshape_removing_a_strip_and_bus_shifts_later_fifos_down() {
+        // Three strips feeding bus 0, three buses; master is bus 2.
+        let layout = |strips: usize, buses: usize| MixerLayout {
+            strips: vec![StripSpec { routes: 0b111, ..StripSpec::stereo() }; strips],
+            buses: vec![BusSpec::stereo(); buses],
+        };
+        let (mut core, mut handle) = engine(Mixer::new(&layout(3, 3), 512, 48_000).unwrap(), 48_000, Some(2));
+        let mut writers = Vec::new();
+        for strip in 0..3 {
+            let (w, r) = fifo(FifoSpec::new(2, 48_000, 48_000, 5.0));
+            writers.push(w);
+            handle.send(Command::AttachInput { strip, reader: Box::new(r) }).unwrap();
+        }
+        let (out_w, mut out_r) = fifo(FifoSpec::new(2, 48_000, 48_000, 5.0));
+        handle.send(Command::AttachOutput { bus: 1, writer: Box::new(out_w) }).unwrap();
+
+        let levels = [0.1f32, 0.2, 0.4];
+        let mut master = vec![0.0f32; 480 * 2];
+        let mut second = vec![0.0f32; 480 * 2];
+        let mut run = |core: &mut EngineCore, master: &mut Vec<f32>, second: &mut Vec<f32>| {
+            for _ in 0..50 {
+                for (w, l) in writers.iter_mut().zip(levels) {
+                    w.write(&vec![l; 480 * 2]);
+                }
+                core.render_master(master, 2);
+                out_r.read(second);
+            }
+        };
+        run(&mut core, &mut master, &mut second);
+        assert!(master.iter().all(|s| (s - 0.7).abs() < 1e-3), "all three strips");
+
+        // Remove strip 1 and bus 1: strip 2's FIFO becomes strip 1, bus 2
+        // (the master) becomes bus 1, the old bus 1 output is detached.
+        let smaller = Mixer::new(&layout(2, 2), 512, 48_000).unwrap();
+        handle
+            .send(Command::Reshape { mixer: Box::new(smaller), remove_input: Some(1), remove_output: Some(1) })
+            .unwrap();
+        run(&mut core, &mut master, &mut second);
+        assert!(master.iter().all(|s| (s - 0.5).abs() < 1e-3), "strips 0 and 2 remain: {}", master[0]);
+        assert_eq!(handle.collect_garbage(), 3, "mixer, strip 1 reader and bus 1 writer");
+        assert_eq!(handle.stats().snapshot().commands_rejected, 0);
     }
 
     #[test]

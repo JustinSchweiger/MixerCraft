@@ -1,14 +1,18 @@
 import { Theme } from "theme.slint";
-import { LedMeter, Fader, IndicatorButton, Knob } from "controls.slint";
+import { LedMeter, Fader, IndicatorButton, Knob, DeviceSelect } from "controls.slint";
+import { LineEdit } from "std-widgets.slint";
 
 export struct StripView {
     name: string,
-    source: string,
+    // Name of the device in use (or "None" / "Default …").
+    device: string,
     pos: float,
     db: float,
     db-text: string,
     mute: bool,
     solo: bool,
+    // Buses only: this bus clocks the engine and cannot be removed.
+    master: bool,
     routes: [bool],
     // Processing knob positions, 0..1 (see src/fx_law.rs).
     gate: float,
@@ -25,22 +29,162 @@ export struct MeterView {
     rp: float,
 }
 
+// Strip card: a header with the name and the device picker, then the body.
+// Right-click (or double-click) the name, or right-click the fader, to rename
+// or remove the strip.
 component StripFrame inherits Rectangle {
     in property <string> name;
-    in property <string> source;
+    in property <string> device;
+    in property <[string]> device-options;
+    in property <bool> removable: true;
+    // "input" or "output", for the menu text.
+    in property <string> kind: "input";
+    callback device-selected(int);
+    callback rename(string);
+    callback remove();
+    property <bool> confirm-remove;
+    public function edit() {
+        self.confirm-remove = false;
+        editor.show();
+    }
     border-radius: Theme.radius;
     background: Theme.strip;
     border-width: 1px;
     border-color: Theme.strip-border;
     VerticalLayout {
-        padding: 8px;
-        spacing: 8px;
-        VerticalLayout {
-            spacing: 1px;
-            Text { text: root.name; font-size: 13px; color: Theme.text; horizontal-alignment: center; overflow: elide; }
-            Text { text: root.source; font-size: 11px; color: Theme.text-dim; horizontal-alignment: center; overflow: elide; }
+        padding: 1px;
+        spacing: 0px;
+        Rectangle {
+            vertical-stretch: 0;
+            background: Theme.strip-header;
+            border-top-left-radius: Theme.radius - 1px;
+            border-top-right-radius: Theme.radius - 1px;
+            VerticalLayout {
+                padding: 8px;
+                padding-top: 9px;
+                spacing: 7px;
+                Text {
+                    text: root.name;
+                    font-size: Theme.font-title;
+                    font-weight: 600;
+                    color: name-touch.has-hover ? Theme.accent : Theme.text;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                    name-touch := TouchArea {
+                        pointer-event(e) => {
+                            if (e.kind == PointerEventKind.up && e.button == PointerEventButton.right) {
+                                root.edit();
+                            }
+                        }
+                        double-clicked => { root.edit(); }
+                    }
+                }
+                DeviceSelect {
+                    text: root.device;
+                    options: root.device-options;
+                    a11y-label: root.name + " device";
+                    selected(i) => { root.device-selected(i); }
+                }
+            }
         }
-        @children
+        VerticalLayout {
+            padding: 9px;
+            spacing: 10px;
+            @children
+        }
+    }
+    editor := PopupWindow {
+        x: 4px;
+        y: 36px;
+        width: max(root.width - 8px, 240px);
+        height: 132px;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.popup;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.strip-border;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: #00000080;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 8px;
+                Text { text: "Rename " + root.kind; font-size: Theme.font-small; color: Theme.text-dim; }
+                name-edit := LineEdit {
+                    text: root.name;
+                    init => {
+                        self.focus();
+                        self.select-all();
+                    }
+                    accepted(t) => {
+                        root.rename(t);
+                        editor.close();
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    if root.removable: IndicatorButton {
+                        text: root.confirm-remove ? "Really remove?" : "Remove";
+                        a11y-label: "Remove " + root.name;
+                        on: root.confirm-remove;
+                        on-color: Theme.red;
+                        on-bg: Theme.red-bg;
+                        clicked => {
+                            if (root.confirm-remove) {
+                                root.remove();
+                                editor.close();
+                            } else {
+                                root.confirm-remove = true;
+                            }
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    IndicatorButton {
+                        text: "Save";
+                        on: true;
+                        clicked => {
+                            root.rename(name-edit.text);
+                            editor.close();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The "+" card at the end of a section.
+component AddCard inherits Rectangle {
+    in property <string> text;
+    callback clicked();
+    width: 58px;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: touch.has-hover ? Theme.accent : Theme.strip-border;
+    background: touch.has-hover ? Theme.strip : transparent;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+    VerticalLayout {
+        alignment: center;
+        spacing: 4px;
+        padding: 4px;
+        Text {
+            text: "+";
+            font-size: 30px;
+            color: touch.has-hover ? Theme.accent : Theme.text-dim;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.text;
+            font-size: Theme.font-small;
+            color: Theme.text-dim;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+    touch := TouchArea {
+        clicked => { root.clicked(); }
     }
 }
 
@@ -54,18 +198,17 @@ export component InputStrip inherits StripFrame {
     callback route(int);
     // kind: 0 gate, 1 compressor, 2 low, 3 mid, 4 high; value 0..1.
     callback fx(int, float);
-    width: 122px;
+    width: 164px;
     name: root.data.name;
-    source: root.data.source;
+    device: root.data.device;
     function eq-text(v: float) -> string {
         abs(v * 24 - 12) < 0.25 ? "0 dB" : ((v * 24 - 12 > 0 ? "+" : "") + round((v * 24 - 12) * 2) / 2 + " dB")
     }
     HorizontalLayout {
-        alignment: center;
-        spacing: 2px;
+        alignment: space-around;
         vertical-stretch: 0;
         Knob {
-            size: 34px;
+            size: 40px;
             label: "Gate";
             value: root.data.gate;
             default-value: 0;
@@ -78,7 +221,7 @@ export component InputStrip inherits StripFrame {
             changed(v) => { root.fx(0, v); }
         }
         Knob {
-            size: 34px;
+            size: 40px;
             label: "Comp";
             value: root.data.comp;
             default-value: 0;
@@ -92,11 +235,10 @@ export component InputStrip inherits StripFrame {
         }
     }
     HorizontalLayout {
-        alignment: center;
-        spacing: 0px;
+        alignment: space-between;
         vertical-stretch: 0;
         Knob {
-            size: 28px;
+            size: 32px;
             label: "Low";
             value: root.data.low;
             default-value: 0.5;
@@ -109,7 +251,7 @@ export component InputStrip inherits StripFrame {
             changed(v) => { root.fx(2, v); }
         }
         Knob {
-            size: 28px;
+            size: 32px;
             label: "Mid";
             value: root.data.mid;
             default-value: 0.5;
@@ -122,7 +264,7 @@ export component InputStrip inherits StripFrame {
             changed(v) => { root.fx(3, v); }
         }
         Knob {
-            size: 28px;
+            size: 32px;
             label: "High";
             value: root.data.high;
             default-value: 0.5;
@@ -135,8 +277,9 @@ export component InputStrip inherits StripFrame {
             changed(v) => { root.fx(4, v); }
         }
     }
+    Rectangle { height: 1px; background: Theme.strip-border; vertical-stretch: 0; }
     HorizontalLayout {
-        spacing: 5px;
+        spacing: 6px;
         alignment: center;
         vertical-stretch: 1;
         LedMeter { level: root.meter.l; peak: root.meter.lp; }
@@ -147,12 +290,14 @@ export component InputStrip inherits StripFrame {
             value-db: root.data.db;
             label: root.data.name + " fader";
             changed(p) => { root.gain(p); }
+            context-menu => { root.edit(); }
         }
         VerticalLayout {
-            spacing: 4px;
+            spacing: 5px;
             alignment: start;
             for bus[j] in root.bus-ids: IndicatorButton {
                 text: bus;
+                min-width: 54px;
                 a11y-label: root.data.name + " to " + bus;
                 on: root.data.routes[j];
                 clicked => { root.route(j); }
@@ -160,10 +305,11 @@ export component InputStrip inherits StripFrame {
         }
     }
     HorizontalLayout {
-        spacing: 4px;
-        alignment: center;
+        spacing: 6px;
+        vertical-stretch: 0;
         IndicatorButton {
             text: "Solo";
+            horizontal-stretch: 1;
             a11y-label: root.data.name + " solo";
             on: root.data.solo;
             on-color: Theme.yellow;
@@ -172,6 +318,7 @@ export component InputStrip inherits StripFrame {
         }
         IndicatorButton {
             text: "Mute";
+            horizontal-stretch: 1;
             a11y-label: root.data.name + " mute";
             on: root.data.mute;
             on-color: Theme.red;
@@ -186,11 +333,13 @@ export component BusStrip inherits StripFrame {
     in property <MeterView> meter;
     callback gain(float);
     callback mute();
-    width: 86px;
+    width: 140px;
+    kind: "output";
+    removable: !root.data.master;
     name: root.data.name;
-    source: root.data.source;
+    device: root.data.device;
     HorizontalLayout {
-        spacing: 5px;
+        spacing: 6px;
         alignment: center;
         vertical-stretch: 1;
         LedMeter { level: root.meter.l; peak: root.meter.lp; }
@@ -201,12 +350,14 @@ export component BusStrip inherits StripFrame {
             value-db: root.data.db;
             label: root.data.name + " fader";
             changed(p) => { root.gain(p); }
+            context-menu => { root.edit(); }
         }
     }
     HorizontalLayout {
-        alignment: center;
+        vertical-stretch: 0;
         IndicatorButton {
             text: "Mute";
+            horizontal-stretch: 1;
             a11y-label: root.data.name + " mute";
             on: root.data.mute;
             on-color: Theme.red;
@@ -218,16 +369,22 @@ export component BusStrip inherits StripFrame {
 
 component Section inherits Rectangle {
     in property <string> title;
-    border-radius: 10px;
+    border-radius: 12px;
     background: Theme.section;
     border-width: 1px;
     border-color: Theme.section-border;
     VerticalLayout {
-        padding: 8px;
-        spacing: 6px;
-        Text { text: root.title; font-size: 11px; color: Theme.text-dim; }
+        padding: 10px;
+        spacing: 8px;
+        Text {
+            text: root.title;
+            font-size: Theme.font-small;
+            font-weight: 600;
+            letter-spacing: 1.2px;
+            color: Theme.text-dim;
+        }
         HorizontalLayout {
-            spacing: 6px;
+            spacing: 8px;
             alignment: start;
             vertical-stretch: 1;
             @children
@@ -241,35 +398,62 @@ export component MixerView inherits HorizontalLayout {
     in property <[StripView]> buses;
     in property <[MeterView]> bus-meters;
     in property <[string]> bus-ids;
+    // Choices offered by the device pickers (the same for every strip/bus).
+    in property <[string]> input-devices;
+    in property <[string]> output-devices;
     callback strip-gain(int, float);
     callback strip-mute(int);
     callback strip-solo(int);
     callback strip-route(int, int);
     callback strip-fx(int, int, float);
+    callback strip-device(int, int);
+    callback strip-rename(int, string);
+    callback strip-remove(int);
+    callback add-strip();
     callback bus-gain(int, float);
     callback bus-mute(int);
-    spacing: 8px;
+    callback bus-device(int, int);
+    callback bus-rename(int, string);
+    callback bus-remove(int);
+    callback add-bus();
+    spacing: 10px;
     alignment: start;
     Section {
-        title: "Inputs";
+        title: "INPUTS";
         for s[i] in root.strips: InputStrip {
             data: s;
             meter: root.strip-meters[i];
             bus-ids: root.bus-ids;
+            device-options: root.input-devices;
             gain(p) => { root.strip-gain(i, p); }
             mute => { root.strip-mute(i); }
             solo => { root.strip-solo(i); }
             route(b) => { root.strip-route(i, b); }
             fx(kind, v) => { root.strip-fx(i, kind, v); }
+            device-selected(d) => { root.strip-device(i, d); }
+            rename(n) => { root.strip-rename(i, n); }
+            remove => { root.strip-remove(i); }
+        }
+        AddCard {
+            text: "Add input";
+            clicked => { root.add-strip(); }
         }
     }
     Section {
-        title: "Outputs";
+        title: "OUTPUTS";
         for b[i] in root.buses: BusStrip {
             data: b;
             meter: root.bus-meters[i];
+            device-options: root.output-devices;
             gain(p) => { root.bus-gain(i, p); }
             mute => { root.bus-mute(i); }
+            device-selected(d) => { root.bus-device(i, d); }
+            rename(n) => { root.bus-rename(i, n); }
+            remove => { root.bus-remove(i); }
+        }
+        AddCard {
+            text: "Add output";
+            clicked => { root.add-bus(); }
         }
     }
 }
