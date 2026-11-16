@@ -37,8 +37,9 @@
 //!   a few hundred ppm (well below audibility) instead of dropping audio;
 //! * **warm-up** – device streams often deliver irregular bursts right after
 //!   starting (e.g. WASAPI pre-filling a render buffer). Shortfalls in the
-//!   first [`WARMUP_SECONDS`] re-prime silently without counting as
-//!   underruns or inflating the latency.
+//!   first [`STARTUP_GRACE_SECONDS`] re-prime silently without counting as
+//!   underruns or inflating the latency. Measured block sizes are applied
+//!   from [`WARMUP_SECONDS`] on.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -49,8 +50,13 @@ use crate::drift::DriftController;
 use crate::resampler::{Quality, Resampler};
 use crate::stats::FifoStats;
 
-/// Duration after which reader shortfalls count as underruns.
+/// Duration before measured block sizes start driving the target.
 pub const WARMUP_SECONDS: f64 = 0.25;
+
+/// Duration after which reader shortfalls count as underruns (and raise the
+/// target). Device streams can stay irregular for a while after starting;
+/// shortfalls before this re-prime silently.
+pub const STARTUP_GRACE_SECONDS: f64 = 1.0;
 
 /// Length of one window of the sliding writer-block maximum.
 pub const BLOCK_WINDOW_SECONDS: f64 = 30.0;
@@ -122,6 +128,7 @@ pub fn fifo(spec: FifoSpec) -> (FifoWriter, FifoReader) {
         to_writer_frames: f64::from(spec.writer_rate) / f64::from(spec.reader_rate),
         frames_read: 0,
         warmup_frames: seconds(spec.reader_rate, WARMUP_SECONDS),
+        grace_frames: seconds(spec.reader_rate, STARTUP_GRACE_SECONDS),
         base_target: spec.target_frames,
         block_window: [0, 0],
         window_len: seconds(spec.reader_rate, BLOCK_WINDOW_SECONDS),
@@ -215,6 +222,7 @@ pub struct FifoReader {
     to_writer_frames: f64,
     frames_read: u64,
     warmup_frames: u64,
+    grace_frames: u64,
     /// The configured target; recovery never shrinks below it.
     base_target: usize,
     /// Writer block maxima of the current and the previous window.
@@ -268,6 +276,7 @@ impl FifoReader {
         let frames = out.len() / ch;
         let out = &mut out[..frames * ch];
         let warming_up = self.frames_read < self.warmup_frames;
+        let in_grace = self.frames_read < self.grace_frames;
         self.frames_read += frames as u64;
 
         // The FIFO must hold at least one writer block plus one reader
@@ -282,11 +291,12 @@ impl FifoReader {
             if need > self.target && self.target < self.max_target {
                 self.set_target(need.min(self.max_target));
                 self.reset_quiet();
-                // Re-priming inserts silence, so only do it when the current
-                // fill cannot even ride out one writer gap. Otherwise the
-                // drift controller raises the fill to the new target
-                // smoothly.
-                if self.primed && total < recent_write as f64 {
+                // Re-priming inserts silence, so after startup only do it
+                // when the current fill cannot even ride out one writer gap;
+                // otherwise the drift controller raises the fill smoothly.
+                // During the startup grace a re-prime is inaudible and avoids
+                // a seconds-long pitch correction.
+                if self.primed && (in_grace || total < recent_write as f64) {
                     self.primed = false;
                 }
             } else {
@@ -297,7 +307,7 @@ impl FifoReader {
         if !self.primed {
             if ring < self.target {
                 out.fill(0.0);
-                if !warming_up {
+                if !in_grace {
                     self.stats.gap_reads.fetch_add(1, Ordering::Relaxed);
                 }
                 return ReadOutcome::Priming;
@@ -352,7 +362,7 @@ impl FifoReader {
         if produced < frames {
             out[produced * ch..].fill(0.0);
             self.primed = false;
-            if warming_up {
+            if in_grace {
                 return ReadOutcome::Priming;
             }
             self.stats.underruns.fetch_add(1, Ordering::Relaxed);
@@ -469,6 +479,38 @@ mod tests {
     }
 
     #[test]
+    fn shortfall_in_startup_grace_is_not_counted() {
+        let spec = FifoSpec::new(1, 48_000, 48_000, 15.0);
+        let (mut w, mut r) = fifo(spec);
+        stream(&mut w, &mut r, 480, 60); // 0.6 s: past warm-up, in grace
+        let target = r.target_frames();
+        let mut out = vec![0.0f32; 480];
+        for _ in 0..10 {
+            r.read(&mut out); // writer hiccup
+        }
+        let s = r.stats().snapshot();
+        assert_eq!((s.underruns, s.gap_reads), (0, 0));
+        assert_eq!(r.target_frames(), target, "no latency penalty for startup irregularities");
+        stream(&mut w, &mut r, 480, 100);
+        w.write(&[0.5; 480]);
+        assert_eq!(r.read(&mut out), ReadOutcome::Ok, "recovers after re-priming");
+    }
+
+    /// Hardware finding: a startup raise filled by the drift controller
+    /// means seconds of ~-1500 ppm. Within the startup grace the FIFO
+    /// re-primes instead, so the ratio is settled right after startup.
+    #[test]
+    fn startup_raise_does_not_cause_pitch_correction() {
+        let spec = FifoSpec::new(2, 48_000, 48_000, 15.0); // 720 < 480 + 480
+        let (mut w, mut r) = fifo(spec);
+        stream(&mut w, &mut r, 480, 300); // 3 s
+        let s = r.stats().snapshot();
+        assert_eq!(r.target_frames(), 960);
+        assert_eq!((s.underruns, s.gap_reads), (0, 0));
+        assert!(s.drift_ppm.abs() < 100.0, "ratio settled, got {} ppm", s.drift_ppm);
+    }
+
+    #[test]
     fn target_follows_measured_block_sizes() {
         let spec = FifoSpec::new(1, 48_000, 48_000, 2.0); // 96 frames: too small
         let (mut w, mut r) = fifo(spec);
@@ -481,7 +523,7 @@ mod tests {
     fn underrun_after_warmup_pads_with_silence_and_raises_target() {
         let spec = FifoSpec::new(1, 48_000, 48_000, 2.0);
         let (mut w, mut r) = fifo(spec);
-        stream(&mut w, &mut r, 256, 100);
+        stream(&mut w, &mut r, 256, 300); // past the startup grace
         let before = r.target_frames();
         let mut out = vec![1.0; 256];
         let mut outcome = ReadOutcome::Ok;
