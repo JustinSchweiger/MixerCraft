@@ -1,0 +1,36 @@
+name: Bug report
+description: Something does not work or audio misbehaves
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Include what you expected instead. For audio problems describe the symptom (crackling, dropouts, distortion, silence) and when it starts.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Windows 11, Windows 10, Linux (PipeWire), Linux (other), macOS (Apple Silicon), macOS (Intel)]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: MixerCraft version
+      placeholder: "output of `mixercraftd --version`"
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Engine status
+      description: Output of `mixercraft status` while the problem occurs (contains device names, no personal data).
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Engine log
+      render: text
