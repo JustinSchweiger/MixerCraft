@@ -22,3 +22,9 @@ slint-build.workspace = true
 
 [lints]
 workspace = true
+
+# The tray needs a GTK main loop on Linux; it is enabled on Windows and macOS
+# for now (see docs/feature-matrix.md).
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+tray-icon.workspace = true
+png.workspace = true

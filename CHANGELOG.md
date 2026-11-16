@@ -10,6 +10,8 @@ All notable changes to this project are documented here. The format follows
 - Minimum supported Rust version is now 1.95 (required by Slint).
 
 ### Fixed
+- A second engine start now reports "already running" instead of a Windows
+  "access denied" error.
 - FIFO latency now recovers after stalls instead of staying raised forever;
   latency raises and recoveries appear in the engine's recovery log.
 - Device streams get a 1 s startup grace: early shortfalls re-prime without
@@ -21,6 +23,9 @@ All notable changes to this project are documented here. The format follows
   buses with pill faders, LED meters with peak hold, routing, mute and solo
   buttons; diagnostics tab; starts the engine when it isn't running;
   reconnects automatically.
+- Tray icon (Windows, macOS) with per-input mute, engine start/stop and
+  quit; closing the window hides it to the tray; a second launch shows the
+  running window; `--tray` starts hidden.
 - Repeated identical recovery events are merged into one entry with a count.
 - `mixercraft autostart enable|disable|status`: Task Scheduler logon task
   (Windows), systemd user unit (Linux), LaunchAgent (macOS).

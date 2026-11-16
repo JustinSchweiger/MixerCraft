@@ -51,7 +51,8 @@ microphone routed to speakers feeds back:
 ```
 
 Open the mixer window (it connects to the running engine, or offers to start
-it):
+it). On Windows and macOS it lives in the system tray: closing the window
+hides it, and `--tray` starts it hidden:
 
 ```bash
 ./target/release/mixercraft-gui
