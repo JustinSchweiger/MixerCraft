@@ -109,8 +109,8 @@ fn main() -> anyhow::Result<()> {
                 print!("  {:7} {:10} {} ({} Hz, {} ch)", d.role, d.state, d.name, d.sample_rate, d.channels);
                 if let Some(f) = d.fifo {
                     print!(
-                        "  fifo {}/{}  xruns {}u/{}o  drift {:+.1} ppm",
-                        f.fill_frames, f.target_frames, f.underruns, f.overruns, f.drift_ppm
+                        "  fifo {}/{}  xruns {}u/{}o  gaps {}  drift {:+.1} ppm",
+                        f.fill_frames, f.target_frames, f.underruns, f.overruns, f.gap_reads, f.drift_ppm
                     );
                 }
                 println!();

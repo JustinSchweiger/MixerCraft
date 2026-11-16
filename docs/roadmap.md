@@ -34,14 +34,16 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 |---|---|---|---|
 | 2026-11-16 | Windows 11 Pro 26300, x86_64 | master: onboard HDA S/PDIF; input: Scarlett Solo USB; output: Voicemeeter VAIO virtual input | Startup to audio 208–234 ms. Gain, mute, solo, routing and meters verified over IPC. Config persisted atomically. 7-minute release run: 0 errors; 1 input and 2 output FIFO underruns while the machine was compiling on all cores, after which adaptive targets settled at 30/45 ms; drift corrections within ±5 ppm. |
 | 2026-11-16 | same | same | 4-minute release run with timestamped FIFO events: zero underruns at startup (warm-up + measured targets at 960 frames / 20 ms); one simultaneous underrun on both FIFOs at 85 s with engine load ≤ 2.7 %, consistent with a delayed master-device callback during heavy compilation (cause not proven). Both targets then rose to 2160 frames (45 ms) and stayed there. |
+| 2026-11-16 | same | same | Latency recovery (3 runs, 300 ms process freeze injected via `NtSuspendProcess`). Final run: the freeze at 6.6 s caused underruns on both FIFOs (expected for a stall longer than any buffer); afterwards **no further gaps for ~10 minutes**. Recovery started after 5 quiet minutes; mic FIFO 47 → 20 ms, output FIFO 48 → 31.3 ms (its measured requirement: the master occasionally delivers double periods) with no re-raise. Earlier runs exposed the shrink/raise oscillation and re-prime gaps that the final code fixes. Also seen once: a mic underrun 1.0 s after start, just past the 250 ms warm-up. |
 
 ## Known limitations found in testing
 
-* **FIFO latency only ever grows.** After a stall, the catch-up burst becomes
-  the "largest writer block" and a genuine underrun raises the target by
-  50 %; nothing lowers it again. Planned fix: decaying maximum for observed
-  block sizes and a slow target reduction after a long glitch-free period
-  (e.g. 10 minutes), bounded by the profile minimum.
+* ~~**FIFO latency only ever grows.**~~ Fixed: writer block sizes use a
+  30–60 s sliding maximum, and after 5 glitch-free minutes the target
+  shrinks by 1 ms every 5 s (≈ 200 ppm correction) down to the configured
+  target or the largest block requirement of the quiet period. A first
+  hardware run exposed a shrink/raise oscillation on an output whose master
+  occasionally delivers double periods; the quiet-period floor fixes it.
 * **Drift ripple after re-priming.** The controller keeps its learned ratio
   but the fill jumps; transient corrections up to ~90 ppm were observed
   right after an underrun, settling within the loop time constant.

@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- FIFO latency now recovers after stalls instead of staying raised forever;
+  latency raises and recoveries appear in the engine's recovery log.
+
 ### Added
 - Real-time audio core: planar buffers, click-free gain smoothing, lock-free
   peak/RMS meters, channel mapping, strip/bus mixer with mute, solo and

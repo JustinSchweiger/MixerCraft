@@ -174,6 +174,8 @@ pub struct FifoStatus {
     pub underruns: u64,
     pub overruns: u64,
     pub dropped_frames: u64,
+    /// Device callbacks that contained a gap of silence (after warm-up).
+    pub gap_reads: u64,
     pub drift_ppm: f64,
 }
 

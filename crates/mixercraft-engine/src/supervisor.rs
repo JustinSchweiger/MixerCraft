@@ -103,7 +103,21 @@ struct Slot {
     progress: (u64, Instant),
     /// Underrun/overrun counts already reported, to log only changes.
     seen_xruns: (u64, u64),
+    /// Latency bookkeeping for the recovery log.
+    latency: LatencyWatch,
 }
+
+/// Turns step-wise FIFO target changes into start/end events instead of one
+/// log line per 1 ms step.
+#[derive(Debug, Clone, Copy, Default)]
+struct LatencyWatch {
+    target: u32,
+    shrinking_since: Option<u32>,
+    last_change: Option<Instant>,
+}
+
+/// A shrink is considered finished after this long without another step.
+const SHRINK_SETTLED: Duration = Duration::from_secs(15);
 
 /// A successfully opened device stream and how to wire it into the engine.
 struct Opened {
@@ -368,6 +382,7 @@ impl Supervisor {
     /// Turns FIFO counter changes into timestamped recovery-log entries so
     /// glitches can be correlated with system events.
     fn report_fifo_events(&mut self, i: usize) {
+        self.report_latency_changes(i);
         let slot = &mut self.slots[i];
         let Some(f) = &slot.fifo else { return };
         let snap = f.snapshot();
@@ -384,6 +399,44 @@ impl Supervisor {
         warn!(device = %label, underruns = snap.underruns, overruns = snap.overruns, target = snap.target_frames, "FIFO xrun");
         let event = if snap.underruns > under { "underrun" } else { "overrun" };
         self.log_event(&label, event, &detail);
+    }
+
+    /// Logs FIFO target increases, and the start and end of latency
+    /// recovery (the reader shrinks its target in 1 ms steps).
+    fn report_latency_changes(&mut self, i: usize) {
+        let now = Instant::now();
+        let slot = &mut self.slots[i];
+        let Some(f) = &slot.fifo else { return };
+        let target = f.snapshot().target_frames;
+        let w = &mut slot.latency;
+        let rate = slot.info.as_ref().map_or(48_000, |i| i.sample_rate).max(1);
+        let ms = |frames: u32| f64::from(frames) * 1000.0 / f64::from(rate);
+        let mut event = None;
+        if w.target == 0 {
+            w.target = target; // first observation after (re)opening
+        } else if target > w.target {
+            w.shrinking_since = None;
+            event = Some(("latency raised", format!("FIFO target {:.1} → {:.1} ms", ms(w.target), ms(target))));
+            w.target = target;
+            w.last_change = Some(now);
+        } else if target < w.target {
+            if w.shrinking_since.is_none() {
+                w.shrinking_since = Some(w.target);
+                event = Some(("latency recovery started", format!("FIFO target {:.1} ms, shrinking", ms(w.target))));
+            }
+            w.target = target;
+            w.last_change = Some(now);
+        } else if let (Some(from), Some(at)) = (w.shrinking_since, w.last_change)
+            && now - at > SHRINK_SETTLED
+        {
+            w.shrinking_since = None;
+            event = Some(("latency recovered", format!("FIFO target {:.1} → {:.1} ms", ms(from), ms(target))));
+        }
+        if let Some((name, detail)) = event {
+            let label = slot.label.clone();
+            info!(device = %label, "{name}: {detail}");
+            self.log_event(&label, name, &detail);
+        }
     }
 
     fn on_fault(&mut self, ev: DeviceEvent) {
@@ -552,6 +605,7 @@ impl Supervisor {
                 slot.fifo = fifo_stats;
                 slot.progress = (0, Instant::now());
                 slot.seen_xruns = (0, 0);
+                slot.latency = LatencyWatch::default();
                 slot.state = SlotState::Running { _stream: Box::new(stream), since: Instant::now(), direct_master };
                 let label = slot.label.clone();
                 if direct_master {
@@ -777,6 +831,7 @@ impl Supervisor {
                             underruns: f.underruns,
                             overruns: f.overruns,
                             dropped_frames: f.dropped_frames,
+                            gap_reads: f.gap_reads,
                             drift_ppm: f.drift_ppm,
                         }
                     }),
@@ -830,6 +885,7 @@ impl Slot {
             last_error: None,
             progress: (0, now),
             seen_xruns: (0, 0),
+            latency: LatencyWatch::default(),
         }
     }
 }
