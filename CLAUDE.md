@@ -10,9 +10,12 @@ predictable latency 4. Fast startup, automatic recovery 5. Cross-platform
 distribution, updates 9. Extensibility.
 
 ## Layout
-* `crates/mixercraft-core` — real-time engine, no OS code, one dependency
-  (`rtrb`). Mixer, resampler, drift controller, FIFOs, processing cycle.
-* `crates/mixercraft-config` — TOML schema v1, migrations, atomic saves.
+* `crates/mixercraft-core` — real-time engine, no OS code; dependencies
+  `rtrb` and `mixercraft-denoise`. Mixer, resampler, drift controller,
+  FIFOs, processing cycle, strip FX/noise suppression, bus keep-awake.
+* `crates/mixercraft-denoise` — vendored RNNoise port (nnnoiseless 0.5.2,
+  BSD-3) with allocation-free FFTs; keep it close to upstream.
+* `crates/mixercraft-config` — TOML schema v3, migrations, atomic saves.
 * `crates/mixercraft-ipc` — NDJSON protocol v1, local socket transport.
 * `crates/mixercraft-platform` — capability model + cpal device I/O +
   virtual devices (`virtual_dev`, ids `virtual:<name>`).

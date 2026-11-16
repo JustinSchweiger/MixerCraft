@@ -83,6 +83,8 @@ pub enum Request {
     RenameStrip { strip: u16, name: String },
     /// Renames a bus (its id stays).
     RenameBus { bus: u16, name: String },
+    /// Sets a bus's keep-awake tone (keeps auto-standby speakers on).
+    SetBusKeepAwake { bus: u16, keep_awake: KeepAwake },
     /// Asks the engine to stop gracefully.
     Shutdown,
 }
@@ -167,6 +169,8 @@ pub struct EngineStatus {
     pub virtual_devices: bool,
     /// Why virtual devices are unavailable (empty when they are).
     pub virtual_devices_note: String,
+    /// Strip noise suppression works at the current engine rate (48 kHz).
+    pub noise_suppression_available: bool,
 }
 
 /// State of one opened device stream.
@@ -232,6 +236,25 @@ pub enum DeviceChoice {
     Device { id: Option<String>, name: Option<String> },
 }
 
+/// Keep-awake tone of a bus: after 10 s of silence a quiet infrasonic sine
+/// keeps speakers with auto-standby from switching off.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KeepAwake {
+    /// Whether the tone is used.
+    pub enabled: bool,
+    /// Tone level (dBFS peak), -70 to -20.
+    pub level_db: f32,
+    /// Tone frequency (Hz), 5 to 40.
+    pub frequency_hz: f32,
+}
+
+impl Default for KeepAwake {
+    fn default() -> Self {
+        Self { enabled: false, level_db: -45.0, frequency_hz: 15.0 }
+    }
+}
+
 /// Gate, EQ and compressor settings of a strip.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -246,11 +269,20 @@ pub struct StripFx {
     pub eq_mid_db: f32,
     /// High shelf gain (dB, ±12).
     pub eq_high_db: f32,
+    /// RNNoise speech noise suppression.
+    pub noise_suppression: bool,
 }
 
 impl Default for StripFx {
     fn default() -> Self {
-        Self { gate_threshold_db: -80.0, comp_amount: 0.0, eq_low_db: 0.0, eq_mid_db: 0.0, eq_high_db: 0.0 }
+        Self {
+            gate_threshold_db: -80.0,
+            comp_amount: 0.0,
+            eq_low_db: 0.0,
+            eq_mid_db: 0.0,
+            eq_high_db: 0.0,
+            noise_suppression: false,
+        }
     }
 }
 
@@ -268,6 +300,8 @@ pub struct BusStatus {
     pub sink_choice: DeviceChoice,
     /// This bus clocks the engine (it cannot be removed).
     pub master: bool,
+    /// Keep-awake tone settings.
+    pub keep_awake: KeepAwake,
 }
 
 /// One entry in the recovery log.

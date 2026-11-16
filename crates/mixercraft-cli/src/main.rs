@@ -63,6 +63,21 @@ enum Cmd {
         /// High shelf gain (dB).
         #[arg(long, allow_negative_numbers = true)]
         high: Option<f32>,
+        /// RNNoise speech noise suppression (needs a 48 kHz engine; adds 20 ms).
+        #[arg(long)]
+        denoise: Option<OnOff>,
+    },
+    /// Keep speakers with auto-standby awake: after 10 s of silence a bus
+    /// plays an inaudible infrasonic tone (default 15 Hz at -45 dBFS).
+    KeepAwake {
+        bus: u16,
+        state: OnOff,
+        /// Tone level in dBFS (-70 to -20).
+        #[arg(long, allow_negative_numbers = true)]
+        level: Option<f32>,
+        /// Tone frequency in Hz (5 to 40).
+        #[arg(long)]
+        frequency: Option<f32>,
     },
     /// Choose the capture device of a strip: "none", "default", a device
     /// name or id (see `mixercraft devices`), or `virtual:<name>` for a
@@ -125,7 +140,7 @@ enum AutostartCmd {
     Status,
 }
 
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum OnOff {
     On,
     Off,
@@ -186,7 +201,7 @@ fn main() -> anyhow::Result<()> {
         Cmd::RemoveBus { bus } => Request::RemoveBus { bus },
         Cmd::RenameStrip { strip, ref name } => Request::RenameStrip { strip, name: name.clone() },
         Cmd::RenameBus { bus, ref name } => Request::RenameBus { bus, name: name.clone() },
-        Cmd::Fx { strip, gate, comp, low, mid, high } => {
+        Cmd::Fx { strip, gate, comp, low, mid, high, denoise } => {
             let Response::Status(s) = c.request(&Request::Status)? else { anyhow::bail!("unexpected answer") };
             let mut fx = s.strips.get(usize::from(strip)).context("no such strip")?.fx;
             fx.gate_threshold_db = gate.unwrap_or(fx.gate_threshold_db);
@@ -194,7 +209,24 @@ fn main() -> anyhow::Result<()> {
             fx.eq_low_db = low.unwrap_or(fx.eq_low_db);
             fx.eq_mid_db = mid.unwrap_or(fx.eq_mid_db);
             fx.eq_high_db = high.unwrap_or(fx.eq_high_db);
+            if let Some(d) = denoise {
+                if d == OnOff::On && !s.noise_suppression_available {
+                    anyhow::bail!(
+                        "noise suppression needs the engine to run at 48 kHz (it runs at {} Hz)",
+                        s.sample_rate
+                    );
+                }
+                fx.noise_suppression = d.into();
+            }
             Request::SetStripFx { strip, fx }
+        }
+        Cmd::KeepAwake { bus, state, level, frequency } => {
+            let Response::Status(s) = c.request(&Request::Status)? else { anyhow::bail!("unexpected answer") };
+            let mut keep_awake = s.buses.get(usize::from(bus)).context("no such bus")?.keep_awake;
+            keep_awake.enabled = state.into();
+            keep_awake.level_db = level.unwrap_or(keep_awake.level_db);
+            keep_awake.frequency_hz = frequency.unwrap_or(keep_awake.frequency_hz);
+            Request::SetBusKeepAwake { bus, keep_awake }
         }
         Cmd::Shutdown => Request::Shutdown,
         Cmd::Capabilities | Cmd::LocalDevices | Cmd::DefaultConfig | Cmd::Autostart { .. } => {
@@ -239,6 +271,9 @@ fn main() -> anyhow::Result<()> {
                 if f.comp_amount > 0.0 {
                     fx.push(format!("comp {:.1}", f.comp_amount));
                 }
+                if f.noise_suppression {
+                    fx.push("denoise".to_owned());
+                }
                 if f.eq_low_db != 0.0 || f.eq_mid_db != 0.0 || f.eq_high_db != 0.0 {
                     fx.push(format!("EQ {:+.1}/{:+.1}/{:+.1} dB", f.eq_low_db, f.eq_mid_db, f.eq_high_db));
                 }
@@ -256,12 +291,17 @@ fn main() -> anyhow::Result<()> {
             println!("buses:");
             for (i, b) in s.buses.iter().enumerate() {
                 println!(
-                    "  {i}: {:3} {:12} {:>6.1} dB{}  [{}]",
+                    "  {i}: {:3} {:12} {:>6.1} dB{}  [{}]{}",
                     b.id,
                     b.name,
                     b.gain_db,
                     if b.mute { " M" } else { "" },
-                    b.sink
+                    b.sink,
+                    if b.keep_awake.enabled {
+                        format!("  keep-awake {:.0} Hz at {:.0} dBFS", b.keep_awake.frequency_hz, b.keep_awake.level_db)
+                    } else {
+                        String::new()
+                    }
                 );
             }
             if !s.recovery_events.is_empty() {

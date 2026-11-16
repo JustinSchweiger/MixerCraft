@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// The schema version written by this build.
-pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 
 /// Gate thresholds at or below this mean "gate off" (mirrors the engine).
 pub const GATE_OFF_DB: f32 = -80.0;
@@ -206,11 +206,20 @@ pub struct FxConfig {
     pub eq_mid_db: f32,
     /// High shelf gain (dB, ±12).
     pub eq_high_db: f32,
+    /// RNNoise speech noise suppression (schema 3).
+    pub noise_suppression: bool,
 }
 
 impl Default for FxConfig {
     fn default() -> Self {
-        Self { gate_threshold_db: GATE_OFF_DB, comp_amount: 0.0, eq_low_db: 0.0, eq_mid_db: 0.0, eq_high_db: 0.0 }
+        Self {
+            gate_threshold_db: GATE_OFF_DB,
+            comp_amount: 0.0,
+            eq_low_db: 0.0,
+            eq_mid_db: 0.0,
+            eq_high_db: 0.0,
+            noise_suppression: false,
+        }
     }
 }
 
@@ -254,6 +263,45 @@ pub struct BusConfig {
     /// Mute.
     #[serde(default)]
     pub mute: bool,
+    /// Inaudible tone that keeps auto-standby speakers on (schema 3).
+    #[serde(default, skip_serializing_if = "KeepAwakeConfig::is_default")]
+    pub keep_awake: KeepAwakeConfig,
+}
+
+/// Keep-awake tone of a bus (schema 3): after 10 s of silence a quiet
+/// infrasonic sine keeps speakers with auto-standby from switching off.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct KeepAwakeConfig {
+    /// Whether the tone is used.
+    pub enabled: bool,
+    /// Tone level (dBFS peak), -70 to -20.
+    pub level_db: f32,
+    /// Tone frequency (Hz), 5 to 40.
+    pub frequency_hz: f32,
+}
+
+impl Default for KeepAwakeConfig {
+    fn default() -> Self {
+        Self { enabled: false, level_db: -45.0, frequency_hz: 15.0 }
+    }
+}
+
+impl KeepAwakeConfig {
+    /// Whether these are the defaults (not written to the file then).
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    fn validate(&self, owner: &str) -> Result<(), ConfigError> {
+        let ok = |v: f32, lo: f32, hi: f32| v.is_finite() && (lo..=hi).contains(&v);
+        if ok(self.level_db, -70.0, -20.0) && ok(self.frequency_hz, 5.0, 40.0) {
+            Ok(())
+        } else {
+            Err(ConfigError::Invalid(format!("'{owner}' has keep-awake settings out of range")))
+        }
+    }
 }
 
 fn two() -> u8 {
@@ -302,6 +350,7 @@ impl Default for Config {
                 channels: 2,
                 gain_db: 0.0,
                 mute: false,
+                keep_awake: KeepAwakeConfig::default(),
             }],
         }
     }
@@ -350,6 +399,7 @@ impl Config {
             }
             check_channels(b.channels, &b.name)?;
             check_gain(b.gain_db, &b.name)?;
+            b.keep_awake.validate(&b.name)?;
         }
         for s in &self.strips {
             check_channels(s.channels, &s.name)?;
@@ -412,6 +462,7 @@ pub fn migrate(doc: toml::Table) -> Result<toml::Table, ConfigError> {
         // Each schema change adds one arm that upgrades a single step and
         // recurses, so every historical document has a tested path.
         1 => migrate(migrate_1_to_2(doc)),
+        2 => migrate(migrate_2_to_3(doc)),
         _ => Ok(doc),
     }
 }
@@ -420,6 +471,14 @@ pub fn migrate(doc: toml::Table) -> Result<toml::Table, ConfigError> {
 /// so the upgrade only bumps the version.
 fn migrate_1_to_2(mut doc: toml::Table) -> toml::Table {
     doc.insert("schema_version".into(), toml::Value::Integer(2));
+    doc
+}
+
+/// Schema 3 added `fx.noise_suppression` and per-bus `keep_awake` tables;
+/// both default to off, so the upgrade only bumps the version. (Older
+/// engines reject the new fields, hence the version bump.)
+fn migrate_2_to_3(mut doc: toml::Table) -> toml::Table {
+    doc.insert("schema_version".into(), toml::Value::Integer(3));
     doc
 }
 
@@ -548,21 +607,57 @@ name = "Stream"
     }
 
     #[test]
-    fn schema_1_documents_migrate_to_schema_2() {
+    fn schema_1_documents_migrate_to_the_current_schema() {
         assert!(EXAMPLE.contains("schema_version = 1"));
         let c = load_str(EXAMPLE).unwrap();
-        assert_eq!(c.schema_version, 2);
+        assert_eq!(c.schema_version, CURRENT_SCHEMA_VERSION);
         assert!(c.strips.iter().all(|s| s.fx.is_off()));
+        assert!(c.buses.iter().all(|b| b.keep_awake.is_default()));
         let saved = c.to_toml().unwrap();
-        assert!(saved.contains("schema_version = 2"));
+        assert!(saved.contains("schema_version = 3"));
         assert!(!saved.contains("[strips.fx]"), "default processing is not written");
+        assert!(!saved.contains("keep_awake"), "default keep-awake is not written");
+    }
+
+    #[test]
+    fn schema_2_documents_migrate_to_schema_3() {
+        let v2 = EXAMPLE.replace("schema_version = 1", "schema_version = 2").replace(
+            r#"routes = ["A1"]"#,
+            "routes = [\"A1\"]
+
+[strips.fx]
+comp_amount = 3.0",
+        );
+        let c = load_str(&v2).unwrap();
+        assert_eq!(c.schema_version, 3);
+        assert_eq!(c.strips[1].fx.comp_amount, 3.0, "fx of the second strip kept");
+        assert!(!c.strips[1].fx.noise_suppression, "new settings default to off");
+    }
+
+    #[test]
+    fn noise_suppression_and_keep_awake_roundtrip_and_validation() {
+        let mut c = load_str(EXAMPLE).unwrap();
+        c.strips[0].fx.noise_suppression = true;
+        c.buses[0].keep_awake = KeepAwakeConfig { enabled: true, level_db: -40.0, frequency_hz: 12.0 };
+        let text = c.to_toml().unwrap();
+        assert!(text.contains("noise_suppression = true"));
+        assert!(text.contains("[buses.keep_awake]"));
+        assert_eq!(load_str(&text).unwrap(), c);
+        let bad = text.replace("level_db = -40.0", "level_db = -5.0");
+        assert!(matches!(load_str(&bad), Err(ConfigError::Invalid(_))));
     }
 
     #[test]
     fn strip_fx_roundtrip_and_validation() {
         let mut c = load_str(EXAMPLE).unwrap();
-        c.strips[0].fx =
-            FxConfig { gate_threshold_db: -45.0, comp_amount: 4.5, eq_low_db: 2.0, eq_mid_db: -1.5, eq_high_db: 3.0 };
+        c.strips[0].fx = FxConfig {
+            gate_threshold_db: -45.0,
+            comp_amount: 4.5,
+            eq_low_db: 2.0,
+            eq_mid_db: -1.5,
+            eq_high_db: 3.0,
+            noise_suppression: false,
+        };
         let text = c.to_toml().unwrap();
         assert!(text.contains("[strips.fx]"));
         assert_eq!(load_str(&text).unwrap(), c);

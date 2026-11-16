@@ -8,7 +8,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 - Minimum supported Rust version is now 1.95 (required by Slint).
-- Configuration schema 2 (per-strip `fx`); schema 1 files are migrated
+- Configuration schema 3 (schema 2 added per-strip `fx`; schema 3 adds
+  `fx.noise_suppression` and per-bus `keep_awake`); older files are migrated
   automatically.
 
 ### Fixed
@@ -39,6 +40,18 @@ All notable changes to this project are documented here. The format follows
   longer causes a seconds-long pitch correction.
 
 ### Added
+- Noise suppression per input strip (RNNoise, "Denoise" in the app,
+  `mixercraft fx <strip> --denoise on`): removes steady background noise and
+  much of the noise between words while leaving speech untouched. Needs the
+  engine at 48 kHz (otherwise reported as unavailable); adds 20 ms of
+  latency; about 1 % of the cycle budget per stereo strip in a release
+  build. The RNNoise port is vendored as `mixercraft-denoise` (nnnoiseless
+  0.5.2, BSD-3-Clause) with pre-planned FFTs, because upstream allocated on
+  every new audio thread.
+- "Keep awake" per output (`mixercraft keep-awake <bus> on`): after 10 s of
+  silence the bus plays an inaudible 15 Hz tone at -45 dBFS (adjustable) so
+  speakers with auto-standby stay on; it fades out within 100 ms when audio
+  returns and is not shown on the meter.
 - The desktop app starts the engine automatically when it opens and no
   engine is running (once; an engine stopped later, e.g. from the tray, is
   not restarted). `mixercraftd` also reads `MIXERCRAFT_CONFIG` and

@@ -21,6 +21,8 @@ pub struct Knobs {
     pub low: f32,
     pub mid: f32,
     pub high: f32,
+    /// Noise suppression switch.
+    pub denoise: bool,
 }
 
 fn eq_pos(db: f32) -> f32 {
@@ -46,6 +48,7 @@ impl Knobs {
             low: eq_pos(fx.eq_low_db),
             mid: eq_pos(fx.eq_mid_db),
             high: eq_pos(fx.eq_high_db),
+            denoise: fx.noise_suppression,
         }
     }
 
@@ -58,6 +61,7 @@ impl Knobs {
             eq_low_db: eq_db(self.low),
             eq_mid_db: eq_db(self.mid),
             eq_high_db: eq_db(self.high),
+            noise_suppression: self.denoise,
         }
     }
 }
@@ -69,16 +73,22 @@ mod tests {
     #[test]
     fn defaults_are_off_and_centered() {
         let k = Knobs::from_fx(&StripFx::default());
-        assert_eq!(k, Knobs { gate: 0.0, comp: 0.0, low: 0.5, mid: 0.5, high: 0.5 });
+        assert_eq!(k, Knobs { gate: 0.0, comp: 0.0, low: 0.5, mid: 0.5, high: 0.5, denoise: false });
         assert_eq!(k.to_fx(), StripFx::default());
     }
 
     #[test]
     fn roundtrip_and_snapping() {
-        let fx =
-            StripFx { gate_threshold_db: -45.0, comp_amount: 4.5, eq_low_db: 3.0, eq_mid_db: -1.5, eq_high_db: 12.0 };
+        let fx = StripFx {
+            gate_threshold_db: -45.0,
+            comp_amount: 4.5,
+            eq_low_db: 3.0,
+            eq_mid_db: -1.5,
+            eq_high_db: 12.0,
+            noise_suppression: true,
+        };
         assert_eq!(Knobs::from_fx(&fx).to_fx(), fx);
-        let k = Knobs { gate: 0.004, comp: 0.0, low: 0.505, mid: 0.0, high: 1.0 };
+        let k = Knobs { gate: 0.004, comp: 0.0, low: 0.505, mid: 0.0, high: 1.0, denoise: false };
         let f = k.to_fx();
         assert_eq!(f.gate_threshold_db, GATE_OFF, "tiny gate position means off");
         assert_eq!(f.eq_low_db, 0.0, "near centre snaps to 0 dB");

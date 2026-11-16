@@ -1,6 +1,7 @@
 //! Per-strip processing: noise gate, three-band EQ and compressor.
 //!
-//! Order: gate → EQ → compressor, all before the fader. Every stage is
+//! Order: (noise suppression, see [`crate::denoise`]) → gate → EQ →
+//! compressor, all before the fader. Every stage is
 //! skipped entirely when it is off, so a strip without processing is
 //! bit-exact. Stereo (or multichannel) strips are processed with linked
 //! detection so the image does not shift.
@@ -51,11 +52,20 @@ pub struct FxParams {
     pub eq_mid_db: f32,
     /// High shelf gain (dB).
     pub eq_high_db: f32,
+    /// RNNoise speech noise suppression (applied by [`crate::denoise`]).
+    pub noise_suppression: bool,
 }
 
 impl Default for FxParams {
     fn default() -> Self {
-        Self { gate_threshold_db: GATE_OFF_DB, comp_amount: 0.0, eq_low_db: 0.0, eq_mid_db: 0.0, eq_high_db: 0.0 }
+        Self {
+            gate_threshold_db: GATE_OFF_DB,
+            comp_amount: 0.0,
+            eq_low_db: 0.0,
+            eq_mid_db: 0.0,
+            eq_high_db: 0.0,
+            noise_suppression: false,
+        }
     }
 }
 
@@ -73,12 +83,20 @@ impl FxParams {
             eq_low_db: clamp_or(self.eq_low_db, -EQ_RANGE_DB, EQ_RANGE_DB, 0.0),
             eq_mid_db: clamp_or(self.eq_mid_db, -EQ_RANGE_DB, EQ_RANGE_DB, 0.0),
             eq_high_db: clamp_or(self.eq_high_db, -EQ_RANGE_DB, EQ_RANGE_DB, 0.0),
+            noise_suppression: self.noise_suppression,
         }
     }
 
     /// Whether every stage is off.
     #[must_use]
     pub fn is_bypass(&self) -> bool {
+        !self.noise_suppression && self.dynamics_eq_bypass()
+    }
+
+    /// Whether gate, EQ and compressor are off (noise suppression is a
+    /// separate stage).
+    #[must_use]
+    pub fn dynamics_eq_bypass(&self) -> bool {
         self.gate_threshold_db <= GATE_OFF_DB
             && self.comp_amount <= 0.0
             && self.eq_low_db == 0.0
@@ -264,7 +282,7 @@ impl StripFx {
 
     /// Processes the valid frames of `block` in place. Real-time safe.
     pub fn process(&mut self, block: &mut AudioBlock) {
-        if self.params.is_bypass() {
+        if self.params.dynamics_eq_bypass() {
             return;
         }
         let channels = block.channels().min(MAX_CHANNELS);
@@ -457,12 +475,14 @@ mod tests {
             eq_low_db: -40.0,
             eq_mid_db: 0.0,
             eq_high_db: f32::INFINITY,
+            noise_suppression: true,
         }
         .sanitized();
         assert_eq!(p.gate_threshold_db, GATE_OFF_DB);
         assert_eq!(p.comp_amount, COMP_MAX);
         assert_eq!(p.eq_low_db, -EQ_RANGE_DB);
         assert_eq!(p.eq_high_db, EQ_RANGE_DB);
+        assert!(p.noise_suppression);
     }
 
     #[test]
@@ -474,6 +494,7 @@ mod tests {
             eq_low_db: 6.0,
             eq_mid_db: -3.0,
             eq_high_db: 4.0,
+            noise_suppression: false,
         });
         steady_db(&mut fx, 200.0, 0.5, 0.2);
         let mut silent = AudioBlock::new(2, 480);
