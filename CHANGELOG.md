@@ -30,6 +30,10 @@ All notable changes to this project are documented here. The format follows
   longer causes a seconds-long pitch correction.
 
 ### Added
+- The desktop app starts the engine automatically when it opens and no
+  engine is running (once; an engine stopped later, e.g. from the tray, is
+  not restarted). `mixercraftd` also reads `MIXERCRAFT_CONFIG` and
+  `MIXERCRAFT_LOG_DIR`, which an engine started by the app inherits.
 - Virtual devices on Windows without a driver of our own: a strip whose
   source is a "new virtual playback device" (`virtual:<name>`) creates a
   playback endpoint "MixerCraft <name>" that applications play into; a bus

@@ -127,6 +127,7 @@ pub fn run(rx: &Receiver<Cmd>, deliver: &dyn Fn(Update)) {
     let mut next_meter = Instant::now();
     let mut next_status = Instant::now();
     let mut next_devices = Instant::now();
+    let mut tried_auto_start = false;
 
     loop {
         let Some(c) = client.as_mut() else {
@@ -134,8 +135,23 @@ pub fn run(rx: &Receiver<Cmd>, deliver: &dyn Fn(Update)) {
                 Ok(c) => {
                     client = Some(c);
                     announced_disconnect = false;
+                    tried_auto_start = true;
                     next_status = Instant::now();
                     next_devices = Instant::now();
+                    continue;
+                }
+                // No engine when the app opens: start it, once. An engine
+                // that stops later (e.g. stopped from the tray) is not
+                // restarted behind the user's back.
+                Err(_) if !tried_auto_start => {
+                    tried_auto_start = true;
+                    hint = match start_engine() {
+                        Ok(()) => "Starting the engine…".into(),
+                        Err(e) => e,
+                    };
+                    deliver(Update::Disconnected { hint: hint.clone() });
+                    announced_disconnect = true;
+                    std::thread::sleep(Duration::from_millis(300));
                     continue;
                 }
                 Err(_) if !announced_disconnect => {
