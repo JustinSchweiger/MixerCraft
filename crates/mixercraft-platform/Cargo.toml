@@ -11,6 +11,8 @@ publish = false
 
 [dependencies]
 cpal.workspace = true
+mixercraft-usbip.workspace = true
+mixercraft-winaudio.workspace = true
 thiserror.workspace = true
 
 [lints]

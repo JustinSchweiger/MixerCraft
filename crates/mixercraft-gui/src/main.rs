@@ -49,6 +49,9 @@ thread_local! {
     static LOCAL_EDITS: RefCell<HashMap<(bool, usize), Instant>> = RefCell::new(HashMap::new());
     /// What each entry of the input / output device pickers selects.
     static DEVICE_CHOICES: RefCell<(Vec<DeviceChoice>, Vec<DeviceChoice>)> = const { RefCell::new((Vec::new(), Vec::new())) };
+    /// The last device list and whether the engine can create virtual
+    /// devices (the pickers are rebuilt when either changes).
+    static DEVICE_LIST: RefCell<(Vec<DeviceSummary>, bool)> = const { RefCell::new((Vec::new(), false)) };
     /// When the title bar was last pressed (a second press soon after
     /// toggles maximise).
     static LAST_TITLE_PRESS: RefCell<Option<Instant>> = const { RefCell::new(None) };
@@ -110,20 +113,58 @@ fn choice_text(choice: &DeviceChoice, input: bool) -> String {
     }
 }
 
-/// Picker entries ("None", the default, then each device) and what each selects.
-fn device_options(devices: &[DeviceSummary], input: bool) -> (Vec<SharedString>, Vec<DeviceChoice>) {
+/// Id prefix of MixerCraft virtual devices; alone it marks the picker entry
+/// that creates one named after the strip or bus.
+const VIRTUAL_PREFIX: &str = "virtual:";
+
+/// Picker entries ("None", the default, then each device, then a virtual
+/// device if available) and what each selects.
+fn device_options(devices: &[DeviceSummary], input: bool, virtual_ok: bool) -> (Vec<SharedString>, Vec<DeviceChoice>) {
     let mut names = vec![SharedString::from("None"), SharedString::from(choice_text(&DeviceChoice::Default, input))];
     let mut choices = vec![DeviceChoice::None, DeviceChoice::Default];
     for d in devices.iter().filter(|d| if input { d.is_input } else { d.is_output }) {
         names.push(d.name.as_str().into());
         choices.push(DeviceChoice::Device { id: Some(d.id.clone()), name: Some(d.name.clone()) });
     }
+    if virtual_ok {
+        // A strip's virtual device is a playback endpoint applications play
+        // into; a bus's is a recording endpoint applications record from.
+        names.push(if input { "New virtual playback device" } else { "New virtual recording device" }.into());
+        choices.push(DeviceChoice::Device { id: Some(VIRTUAL_PREFIX.into()), name: None });
+    }
     (names, choices)
 }
 
-fn apply_devices(ui: &MainWindow, devices: &[DeviceSummary]) {
-    let (in_names, in_choices) = device_options(devices, true);
-    let (out_names, out_choices) = device_options(devices, false);
+/// Resolves the "new virtual device" entry to a device named after the
+/// strip or bus.
+fn resolve_choice(choice: DeviceChoice, owner: &str) -> DeviceChoice {
+    match choice {
+        DeviceChoice::Device { id: Some(id), name: None } if id == VIRTUAL_PREFIX => DeviceChoice::Device {
+            id: Some(format!("{VIRTUAL_PREFIX}{owner}")),
+            name: Some(format!("MixerCraft {owner}")),
+        },
+        other => other,
+    }
+}
+
+fn apply_devices(ui: &MainWindow, devices: Option<Vec<DeviceSummary>>, virtual_ok: Option<bool>) {
+    let changed = DEVICE_LIST.with(|l| {
+        let mut l = l.borrow_mut();
+        let before = (l.0.clone(), l.1);
+        if let Some(d) = devices {
+            l.0 = d;
+        }
+        if let Some(v) = virtual_ok {
+            l.1 = v;
+        }
+        before != (l.0.clone(), l.1)
+    });
+    if !changed {
+        return;
+    }
+    let (devices, virtual_ok) = DEVICE_LIST.with(|l| l.borrow().clone());
+    let (in_names, in_choices) = device_options(&devices, true, virtual_ok);
+    let (out_names, out_choices) = device_options(&devices, false, virtual_ok);
     if ui.get_input_devices().iter().ne(in_names.iter().cloned()) {
         ui.set_input_devices(ModelRc::new(VecModel::from(in_names)));
     }
@@ -208,6 +249,7 @@ fn sync_rows(current: ModelRc<StripView>, fresh: Vec<StripView>, bus: bool) -> O
 
 fn apply_status(ui: &MainWindow, s: &EngineStatus) {
     ui.set_connected(true);
+    apply_devices(ui, None, Some(s.virtual_devices));
 
     let bus_ids: Vec<SharedString> = s.buses.iter().map(|b| SharedString::from(b.id.as_str())).collect();
     let ids_changed = ui.get_bus_ids().iter().ne(bus_ids.iter().cloned());
@@ -340,7 +382,7 @@ fn apply(ui: &MainWindow, update: Update) {
             return;
         }
         Update::Devices(devices) => {
-            apply_devices(ui, &devices);
+            apply_devices(ui, Some(devices), None);
             return;
         }
         Update::Notice(text) => {
@@ -496,8 +538,11 @@ fn main() -> Result<(), slint::PlatformError> {
     let t = tx.clone();
     ui.on_strip_device(move |i, d| {
         let Some(choice) = DEVICE_CHOICES.with(|c| c.borrow().0.get(d as usize).cloned()) else { return };
+        let ui = w.unwrap();
+        let Some(owner) = vec_model(&ui.get_strips()).and_then(|m| m.row_data(i as usize)) else { return };
+        let choice = resolve_choice(choice, &owner.name);
         let text = choice_text(&choice, true);
-        if edit_row(&w.unwrap().get_strips(), i as usize, |r| r.device = text.into()).is_some() {
+        if edit_row(&ui.get_strips(), i as usize, |r| r.device = text.into()).is_some() {
             mark_edit(false, i as usize);
             let _ = t.send(Cmd::StripSource(i as u16, choice));
         }
@@ -506,8 +551,11 @@ fn main() -> Result<(), slint::PlatformError> {
     let t = tx.clone();
     ui.on_bus_device(move |i, d| {
         let Some(choice) = DEVICE_CHOICES.with(|c| c.borrow().1.get(d as usize).cloned()) else { return };
+        let ui = w.unwrap();
+        let Some(owner) = vec_model(&ui.get_buses()).and_then(|m| m.row_data(i as usize)) else { return };
+        let choice = resolve_choice(choice, &owner.name);
         let text = choice_text(&choice, false);
-        if edit_row(&w.unwrap().get_buses(), i as usize, |r| r.device = text.into()).is_some() {
+        if edit_row(&ui.get_buses(), i as usize, |r| r.device = text.into()).is_some() {
             mark_edit(true, i as usize);
             let _ = t.send(Cmd::BusSink(i as u16, choice));
         }

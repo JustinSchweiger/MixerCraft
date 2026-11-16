@@ -1,0 +1,15 @@
+[package]
+name = "mixercraft-usbip"
+description = "Virtual audio devices for MixerCraft: emulated USB Audio Class 1 devices served over USB/IP."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

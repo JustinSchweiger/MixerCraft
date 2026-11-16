@@ -3216,7 +3216,21 @@ name = "mixercraft-platform"
 version = "0.1.0"
 dependencies = [
  "cpal",
+ "mixercraft-usbip",
+ "mixercraft-winaudio",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "mixercraft-usbip"
+version = "0.1.0"
+
+[[package]]
+name = "mixercraft-winaudio"
+version = "0.1.0"
+dependencies = [
+ "windows",
+ "windows-core",
 ]
 
 [[package]]

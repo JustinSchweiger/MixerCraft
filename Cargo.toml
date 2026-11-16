@@ -4,6 +4,8 @@ members = [
     "crates/mixercraft-core",
     "crates/mixercraft-config",
     "crates/mixercraft-ipc",
+    "crates/mixercraft-usbip",
+    "crates/mixercraft-winaudio",
     "crates/mixercraft-platform",
     "crates/mixercraft-engine",
     "crates/mixercraft-cli",
@@ -25,6 +27,8 @@ mixercraft-core = { path = "crates/mixercraft-core" }
 mixercraft-config = { path = "crates/mixercraft-config" }
 mixercraft-ipc = { path = "crates/mixercraft-ipc" }
 mixercraft-platform = { path = "crates/mixercraft-platform" }
+mixercraft-usbip = { path = "crates/mixercraft-usbip" }
+mixercraft-winaudio = { path = "crates/mixercraft-winaudio" }
 
 anyhow = "1.0.100"
 ctrlc = "3.4"

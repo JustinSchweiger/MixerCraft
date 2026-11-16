@@ -607,6 +607,7 @@ fn main() {
             arg("--secs").and_then(|s| s.parse().ok()).unwrap_or(20),
         ),
         Some("devices") => latency::list(),
+        Some("defaults") => latency::defaults(),
         _ => eprintln!("usage: usbip-audio-spike serve [--sine] | latency [--out NAME] [--in NAME] [--secs N] | devices"),
     }
 }

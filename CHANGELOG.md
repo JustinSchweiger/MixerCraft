@@ -21,6 +21,15 @@ All notable changes to this project are documented here. The format follows
   longer causes a seconds-long pitch correction.
 
 ### Added
+- Virtual devices on Windows without a driver of our own: a strip whose
+  source is a "new virtual playback device" (`virtual:<name>`) creates a
+  playback endpoint "MixerCraft <name>" that applications play into; a bus
+  with a virtual sink creates a recording endpoint applications record from.
+  They are emulated USB audio devices served over USB/IP (`mixercraft-usbip`)
+  and attached through the Microsoft-signed usbip-win2 driver, which the user
+  installs. Windows' default devices are restored after it switches to a new
+  virtual device (`mixercraft-winaudio`). About 95 ms from one application
+  through MixerCraft to another.
 - Inputs and outputs can be added, renamed and removed while audio runs
   (GUI "+" cards and right-click menu; `mixercraft add-strip`, `add-bus`,
   `rename-strip`, `rename-bus`, `remove-strip`, `remove-bus`). The engine

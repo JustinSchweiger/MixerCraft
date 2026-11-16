@@ -120,7 +120,10 @@ fn session_autostart() -> (Support, &'static str) {
 
 #[cfg(windows)]
 fn virtual_endpoints() -> (Support, &'static str) {
-    (Support::Planned, "Requires a signed kernel-mode audio driver (WaveRT/ACX)")
+    match crate::virtual_dev::unavailable_reason() {
+        None => (Support::Partial, "Emulated USB audio devices through usbip-win2; about 65 ms between applications"),
+        Some(_) => (Support::Unsupported, "Install usbip-win2 to create virtual devices (see ADR 0007)"),
+    }
 }
 #[cfg(target_os = "linux")]
 fn virtual_endpoints() -> (Support, &'static str) {

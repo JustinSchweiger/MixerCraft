@@ -14,7 +14,12 @@ distribution, updates 9. Extensibility.
   (`rtrb`). Mixer, resampler, drift controller, FIFOs, processing cycle.
 * `crates/mixercraft-config` — TOML schema v1, migrations, atomic saves.
 * `crates/mixercraft-ipc` — NDJSON protocol v1, local socket transport.
-* `crates/mixercraft-platform` — capability model + cpal device I/O.
+* `crates/mixercraft-platform` — capability model + cpal device I/O +
+  virtual devices (`virtual_dev`, ids `virtual:<name>`).
+* `crates/mixercraft-usbip` — user-space USB/IP server emulating USB audio
+  devices (Windows virtual devices via usbip-win2, ADR 0007).
+* `crates/mixercraft-winaudio` — the only crate with `unsafe` (COM): restores
+  Windows' default devices.
 * `crates/mixercraft-engine` — `mixercraftd`: supervisor, recovery, clocks.
 * `crates/mixercraft-cli` — `mixercraft` client.
 * `crates/mixercraft-gui` — desktop mixer (Slint, software renderer). UI in
@@ -47,10 +52,12 @@ warnings`) · `cargo test --workspace` · `cargo test -p mixercraft-core
 
 ## Decisions and open questions
 See `docs/adr/`. The owner wants zero recurring cost: Windows virtual endpoints follow the
-free path in ADR 0007 (none first, then a USB/IP spike, OSSign inquiry).
+free path in ADR 0007: emulated USB audio devices over USB/IP
+(`mixercraft-usbip`, accepted and implemented); never ask users for test signing.
 License MIT OR Apache-2.0 is accepted (ADR 0008). GUI: Slint with the software renderer (ADR 0005); faders need numeric `accessible-value`.
 
 ## Known risks
-Windows kernel-driver signing; startup-sound routing feasibility (needs a
+Windows virtual devices depend on the third-party usbip-win2 driver
+(~95 ms app to app; no own signed driver); startup-sound routing feasibility (needs a
 service plus a timing test); cpal's 10 ms WASAPI periods; PipeWire graph-node
 backend complexity. Details: `docs/research/feasibility.md` §8.

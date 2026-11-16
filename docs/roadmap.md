@@ -25,7 +25,8 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 3. Linux virtual devices (PipeWire null-audio-sink nodes) — the first
    platform where virtual endpoints need no signing.
 4. Per-application capture on Windows (WASAPI process loopback) as an
-   input source.
+   input source. Virtual devices: soak test, reboot/sleep behaviour, own
+   USB product id.
 5. GUI: global hotkeys; Linux tray (KSNI); GUI autostart with `--tray`; settings tab.
 6. Native WASAPI backend for low latency.
 7. macOS HAL plug-in; Windows driver once signing is arranged.
@@ -42,6 +43,7 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 | 2026-11-16 | same | same | Autostart: `mixercraft autostart enable --now` created the Task Scheduler task without elevation; Task Scheduler started the engine (parent `svchost`, no window, no console host, normal priority); stored settings confirmed (logon trigger, no time limit, battery allowed, 3 restarts at 1 min, least privilege). `disable` removed it. Start at an actual sign-in not tested. |
 | 2026-11-16 | same | same | Redesigned GUI (debug build) against a separate test engine (mic metered only; master on S/PDIF with nothing routed; second bus muted): mouse wheel on faders (2 dB per notch, checked in the engine log) and knobs; device dropdowns switched the mic strip default → Scarlett → default and the muted bus to none and back, reopening only that device; inputs and outputs added, renamed (right-click, type, Enter) and removed while the mic kept metering; new buses appeared as route buttons on every input. One WASAPI backend xrun on the mic 12 s after a strip was added, not aligned with the change. Title-bar drag, maximise and edge resizing were not exercised by script. |
 | 2026-11-16 | same, plus usbip-win2 0.9.8.1 | emulated USB Audio Class 1 device (spike) over USB/IP on 127.0.0.1 | Windows created "Lautsprecher/Mikrofon (MixerCraft Virtual Cable)" with its inbox USB audio driver. 30 s click round trip through the cable: 59/60 detected, 63.8–66.6 ms app to app (mean 65.2 ms), no loopback underruns, URB completion lateness ≤ 2.7 ms. Windows switched the default output and input to the new device on every attach; detach restored them. |
+| 2026-11-16 | same, usbip-win2 0.9.8.1 | virtual devices in the engine: speaker "MixerCraft Game" (strip), microphone "MixerCraft Chat" (bus), two more speakers | Devices created on engine start and removed on shutdown. Click test app → Game → strip → Chat bus → Chat → app: 90–108 ms with settled buffers. After the direction-aware handover fix: 0 gaps at startup and in two 20 s runs; one simultaneous underrun on two inputs (one idle) in a third run. Windows switched the default output to a new virtual device after 1.2 s; MixerCraft restored it within 0.3 s. |
 
 ## Known limitations found in testing
 

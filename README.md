@@ -7,8 +7,10 @@ macOS.
 > **Status: early development (v0.1, pre-release).** The audio engine,
 > routing, drift-compensated multi-device I/O, recovery, configuration, IPC,
 > autostart and a first desktop mixer window work and have been exercised on
-> Windows hardware. There are no virtual devices, no strip processing
-> (EQ/compressor/gate) and no installer yet. See the
+> Windows hardware, including per-strip gate/compressor/EQ and, on Windows,
+> virtual devices (emulated USB audio devices; requires the free
+> [usbip-win2](https://github.com/vadimgrn/usbip-win2) driver). There is no
+> installer yet. See the
 > [roadmap](docs/roadmap.md) and the [feature matrix](docs/feature-matrix.md)
 > for exactly what works where.
 
