@@ -72,3 +72,33 @@ fn engine_cycle_with_fifos_and_commands_does_not_allocate() {
     assert_eq!(snap.rt_deallocations, 0);
     assert!(snap.cycles >= 2_000);
 }
+
+#[test]
+fn reshaping_the_mixer_does_not_allocate_on_the_audio_thread() {
+    let layout = |strips: usize, buses: usize| MixerLayout {
+        strips: vec![StripSpec { routes: 0b1, ..StripSpec::stereo() }; strips],
+        buses: vec![BusSpec::stereo(); buses],
+    };
+    let (mut core, mut handle) = engine(Mixer::new(&layout(3, 3), 1024, 48_000).unwrap(), 48_000, Some(0));
+    let mut readers = Vec::new();
+    for strip in 0..3 {
+        let (w, r) = fifo(FifoSpec::new(2, 48_000, 48_000, 10.0));
+        readers.push(w);
+        handle.send(Command::AttachInput { strip, reader: Box::new(r) }).unwrap();
+    }
+    let (out_w, _out_r) = fifo(FifoSpec::new(2, 48_000, 48_000, 10.0));
+    handle.send(Command::AttachOutput { bus: 2, writer: Box::new(out_w) }).unwrap();
+    let mut master = vec![0.0f32; 480 * 2];
+    assert_no_alloc(|| core.render_master(&mut master, 2));
+
+    // Remove strip 1 and bus 1, then add a strip back.
+    let smaller = Mixer::new(&layout(2, 2), 1024, 48_000).unwrap();
+    handle.send(Command::Reshape { mixer: Box::new(smaller), remove_input: Some(1), remove_output: Some(1) }).unwrap();
+    assert_no_alloc(|| core.render_master(&mut master, 2));
+    let bigger = Mixer::new(&layout(3, 2), 1024, 48_000).unwrap();
+    handle.send(Command::Reshape { mixer: Box::new(bigger), remove_input: None, remove_output: None }).unwrap();
+    assert_no_alloc(|| core.render_master(&mut master, 2));
+    handle.collect_garbage();
+    assert_eq!(handle.stats().snapshot().rt_deallocations, 0);
+    drop(readers);
+}

@@ -1,24 +1,123 @@
 import { Theme } from "theme.slint";
-import { PillButton } from "controls.slint";
+import { PillButton, WindowButton } from "controls.slint";
 import { MixerView, StripView, MeterView } from "mixer.slint";
 import { DiagnosticsView, DeviceRow } from "diagnostics.slint";
+import { AboutView } from "about.slint";
+import { ScrollView } from "std-widgets.slint";
 
 export { StripView, MeterView, DeviceRow }
+
+// Invisible edge or corner that resizes the frameless window.
+// dir: 0 N, 1 S, 2 E, 3 W, 4 NE, 5 NW, 6 SE, 7 SW.
+component ResizeHandle inherits TouchArea {
+    in property <int> dir;
+    callback resize(int);
+    mouse-cursor: root.dir == 0 || root.dir == 1 ? ns-resize
+        : root.dir == 2 || root.dir == 3 ? ew-resize
+        : root.dir == 4 || root.dir == 7 ? nesw-resize
+        : nwse-resize;
+    pointer-event(e) => {
+        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+            root.resize(root.dir);
+        }
+    }
+}
+
+component TitleBar inherits Rectangle {
+    in property <int> tab;
+    in property <string> status-text;
+    in property <color> status-color;
+    in property <bool> max-state;
+    callback tab-selected(int);
+    // Called on every left press on empty title-bar space; the Rust side
+    // starts a window drag, or toggles maximise on a double press.
+    callback drag-window();
+    callback minimize();
+    callback toggle-maximize();
+    callback close-window();
+    height: 44px;
+    background: Theme.titlebar;
+    TouchArea {
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.drag-window();
+            }
+        }
+    }
+    HorizontalLayout {
+        padding-left: 14px;
+        spacing: 8px;
+        VerticalLayout {
+            alignment: center;
+            Image { source: @image-url("icon.png"); width: 20px; height: 20px; }
+        }
+        HorizontalLayout {
+            spacing: 0px;
+            Text { text: "Mixer"; font-size: Theme.font-title; font-weight: 600; color: Theme.text; vertical-alignment: center; }
+            Text { text: "Craft"; font-size: Theme.font-title; font-weight: 600; color: Theme.accent; vertical-alignment: center; }
+        }
+        Rectangle { width: 14px; }
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                spacing: 6px;
+                PillButton { text: "Mixer"; active: root.tab == 0; clicked => { root.tab-selected(0); } }
+                PillButton { text: "Diagnostics"; active: root.tab == 1; clicked => { root.tab-selected(1); } }
+                PillButton { text: "About"; active: root.tab == 2; clicked => { root.tab-selected(2); } }
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Rectangle {
+                height: 26px;
+                border-radius: 13px;
+                border-width: 1px;
+                border-color: Theme.line;
+                background: Theme.section;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 12px;
+                    spacing: 7px;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle { width: 8px; height: 8px; border-radius: 4px; background: root.status-color; }
+                    }
+                    Text { text: root.status-text; font-size: Theme.font-small; color: Theme.text-mid; vertical-alignment: center; }
+                }
+            }
+        }
+        Rectangle { width: 8px; }
+        WindowButton { kind: 0; a11y-label: "Minimize"; clicked => { root.minimize(); } }
+        WindowButton {
+            kind: root.max-state ? 2 : 1;
+            a11y-label: root.max-state ? "Restore" : "Maximize";
+            clicked => { root.toggle-maximize(); }
+        }
+        WindowButton { kind: 3; a11y-label: "Close"; hover-color: Theme.close-hover; clicked => { root.close-window(); } }
+    }
+}
 
 export component MainWindow inherits Window {
     title: "MixerCraft";
     icon: @image-url("icon.png");
-    preferred-width: 1000px;
-    preferred-height: 680px;
-    min-width: 640px;
-    min-height: 420px;
+    no-frame: true;
+    preferred-width: 1240px;
+    preferred-height: 780px;
+    min-width: 720px;
+    min-height: 520px;
     background: Theme.bg;
-    default-font-size: 12px;
+    default-font-size: Theme.font;
 
     in property <bool> connected;
     in property <string> status-text;
     in property <color> status-color: Theme.text-dim;
     in property <string> connection-hint;
+    in property <bool> max-state;
+    in property <string> version;
+    // A short message from the engine (e.g. why a request was refused).
+    in property <string> notice;
     in-out property <int> tab: 0;
 
     in property <[StripView]> strips;
@@ -26,6 +125,8 @@ export component MainWindow inherits Window {
     in property <[StripView]> buses;
     in property <[MeterView]> bus-meters;
     in property <[string]> bus-ids;
+    in property <[string]> input-devices;
+    in property <[string]> output-devices;
 
     in property <[DeviceRow]> devices;
     in property <[string]> events;
@@ -36,104 +137,146 @@ export component MainWindow inherits Window {
     callback strip-solo(int);
     callback strip-route(int, int);
     callback strip-fx(int, int, float);
+    callback strip-device(int, int);
+    callback strip-rename(int, string);
+    callback strip-remove(int);
+    callback add-strip();
     callback bus-gain(int, float);
     callback bus-mute(int);
+    callback bus-device(int, int);
+    callback bus-rename(int, string);
+    callback bus-remove(int);
+    callback add-bus();
     callback start-engine();
 
-    VerticalLayout {
-        padding: 10px;
-        spacing: 10px;
-        HorizontalLayout {
-            spacing: 8px;
-            Text {
-                text: "Mixer";
-                font-size: 15px;
-                color: Theme.text;
-                vertical-alignment: center;
+    callback drag-window();
+    callback minimize();
+    callback toggle-maximize();
+    callback close-window();
+    callback resize(int);
+
+    Rectangle {
+        border-width: root.max-state ? 0px : 1px;
+        border-color: Theme.strip-border;
+        VerticalLayout {
+            padding: root.max-state ? 0px : 1px;
+            TitleBar {
+                tab: root.tab;
+                status-text: root.status-text;
+                status-color: root.status-color;
+                max-state: root.max-state;
+                tab-selected(t) => { root.tab = t; }
+                drag-window => { root.drag-window(); }
+                minimize => { root.minimize(); }
+                toggle-maximize => { root.toggle-maximize(); }
+                close-window => { root.close-window(); }
             }
-            Text {
-                text: "Craft";
-                font-size: 15px;
-                color: Theme.accent;
-                vertical-alignment: center;
-            }
-            Rectangle { width: 8px; }
-            PillButton { text: "Mixer"; active: root.tab == 0; clicked => { root.tab = 0; } }
-            PillButton { text: "Diagnostics"; active: root.tab == 1; clicked => { root.tab = 1; } }
-            Rectangle { horizontal-stretch: 1; }
-            Rectangle {
-                height: 24px;
-                border-radius: 12px;
-                border-width: 1px;
-                border-color: Theme.line;
-                HorizontalLayout {
-                    padding-left: 10px;
-                    padding-right: 12px;
-                    spacing: 7px;
+            Rectangle { height: 1px; background: Theme.section-border; }
+            VerticalLayout {
+                padding: 12px;
+                spacing: 10px;
+                vertical-stretch: 1;
+
+                if root.notice != "": Rectangle {
+                    height: 34px;
+                    border-radius: 8px;
+                    background: Theme.red-bg;
+                    border-width: 1px;
+                    border-color: Theme.red;
+                    Text {
+                        x: 12px;
+                        text: root.notice;
+                        color: Theme.text;
+                        vertical-alignment: center;
+                    }
+                }
+
+                if root.tab == 2: AboutView {
+                    vertical-stretch: 1;
+                    version: root.version;
+                }
+
+                if root.tab != 2 && !root.connected: Rectangle {
+                    vertical-stretch: 1;
+                    border-radius: 12px;
+                    background: Theme.section;
+                    border-width: 1px;
+                    border-color: Theme.section-border;
                     VerticalLayout {
                         alignment: center;
-                        Rectangle { width: 8px; height: 8px; border-radius: 4px; background: root.status-color; }
+                        spacing: 14px;
+                        Text {
+                            text: "The audio engine isn't running";
+                            font-size: 18px;
+                            color: Theme.text;
+                            horizontal-alignment: center;
+                        }
+                        Text {
+                            text: root.connection-hint;
+                            color: Theme.text-dim;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            alignment: center;
+                            PillButton { text: "Start engine"; active: true; clicked => { root.start-engine(); } }
+                        }
                     }
-                    Text { text: root.status-text; font-size: 11px; color: Theme.text-mid; vertical-alignment: center; }
+                }
+
+                if root.connected && root.tab == 0: sv := ScrollView {
+                    vertical-stretch: 1;
+                    // When the strips are wider than the window, leave room
+                    // for the horizontal scroll bar below them instead of
+                    // drawing it over the faders.
+                    property <bool> h-scroll: mixer.preferred-width > self.width;
+                    content-width: max(self.visible-width, mixer.preferred-width);
+                    content-height: max(self.height - (self.h-scroll ? 18px : 0px), mixer.min-height);
+                    mixer := MixerView {
+                        width: sv.content-width;
+                        height: sv.content-height;
+                        strips: root.strips;
+                        strip-meters: root.strip-meters;
+                        buses: root.buses;
+                        bus-meters: root.bus-meters;
+                        bus-ids: root.bus-ids;
+                        input-devices: root.input-devices;
+                        output-devices: root.output-devices;
+                        strip-gain(i, p) => { root.strip-gain(i, p); }
+                        strip-mute(i) => { root.strip-mute(i); }
+                        strip-solo(i) => { root.strip-solo(i); }
+                        strip-route(i, b) => { root.strip-route(i, b); }
+                        strip-fx(i, kind, v) => { root.strip-fx(i, kind, v); }
+                        strip-device(i, d) => { root.strip-device(i, d); }
+                        bus-gain(i, p) => { root.bus-gain(i, p); }
+                        bus-mute(i) => { root.bus-mute(i); }
+                        bus-device(i, d) => { root.bus-device(i, d); }
+                        strip-rename(i, n) => { root.strip-rename(i, n); }
+                        strip-remove(i) => { root.strip-remove(i); }
+                        add-strip => { root.add-strip(); }
+                        bus-rename(i, n) => { root.bus-rename(i, n); }
+                        bus-remove(i) => { root.bus-remove(i); }
+                        add-bus => { root.add-bus(); }
+                    }
+                }
+
+                if root.connected && root.tab == 1: DiagnosticsView {
+                    vertical-stretch: 1;
+                    devices: root.devices;
+                    events: root.events;
+                    engine-line: root.engine-line;
                 }
             }
-        }
-
-        if !root.connected: Rectangle {
-            vertical-stretch: 1;
-            border-radius: 10px;
-            background: Theme.section;
-            border-width: 1px;
-            border-color: Theme.section-border;
-            VerticalLayout {
-                alignment: center;
-                spacing: 12px;
-                Text {
-                    text: "The audio engine isn't running";
-                    font-size: 16px;
-                    color: Theme.text;
-                    horizontal-alignment: center;
-                }
-                Text {
-                    text: root.connection-hint;
-                    font-size: 12px;
-                    color: Theme.text-dim;
-                    horizontal-alignment: center;
-                    wrap: word-wrap;
-                }
-                HorizontalLayout {
-                    alignment: center;
-                    PillButton { text: "Start engine"; active: true; clicked => { root.start-engine(); } }
-                }
-            }
-        }
-
-        if root.connected && root.tab == 0: MixerView {
-            vertical-stretch: 1;
-            strips: root.strips;
-            strip-meters: root.strip-meters;
-            buses: root.buses;
-            bus-meters: root.bus-meters;
-            bus-ids: root.bus-ids;
-            strip-gain(i, p) => { root.strip-gain(i, p); }
-            strip-mute(i) => { root.strip-mute(i); }
-            strip-solo(i) => { root.strip-solo(i); }
-            strip-route(i, b) => { root.strip-route(i, b); }
-            strip-fx(i, kind, v) => { root.strip-fx(i, kind, v); }
-            bus-gain(i, p) => { root.bus-gain(i, p); }
-            bus-mute(i) => { root.bus-mute(i); }
-        }
-
-        if root.connected && root.tab == 1: DiagnosticsView {
-            vertical-stretch: 1;
-            devices: root.devices;
-            events: root.events;
-            engine-line: root.engine-line;
-        }
-
-        HorizontalLayout {
-            Rectangle { horizontal-stretch: 1; }
-            Text { text: "Made with Slint"; font-size: 10px; color: Theme.text-dim; }
         }
     }
+
+    // Resize handles (not when maximised).
+    if !root.max-state: ResizeHandle { dir: 0; x: 8px; y: 0; width: root.width - 16px; height: 5px; resize(d) => { root.resize(d); } }
+    if !root.max-state: ResizeHandle { dir: 1; x: 8px; y: root.height - 5px; width: root.width - 16px; height: 5px; resize(d) => { root.resize(d); } }
+    if !root.max-state: ResizeHandle { dir: 2; x: root.width - 5px; y: 8px; width: 5px; height: root.height - 16px; resize(d) => { root.resize(d); } }
+    if !root.max-state: ResizeHandle { dir: 3; x: 0; y: 8px; width: 5px; height: root.height - 16px; resize(d) => { root.resize(d); } }
+    if !root.max-state: ResizeHandle { dir: 4; x: root.width - 8px; y: 0; width: 8px; height: 8px; resize(d) => { root.resize(d); } }
+    if !root.max-state: ResizeHandle { dir: 5; x: 0; y: 0; width: 8px; height: 8px; resize(d) => { root.resize(d); } }
+    if !root.max-state: ResizeHandle { dir: 6; x: root.width - 8px; y: root.height - 8px; width: 8px; height: 8px; resize(d) => { root.resize(d); } }
+    if !root.max-state: ResizeHandle { dir: 7; x: 0; y: root.height - 8px; width: 8px; height: 8px; resize(d) => { root.resize(d); } }
 }

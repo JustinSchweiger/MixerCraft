@@ -24,23 +24,23 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use mixercraft_config::{Config, Sink, Source};
+use mixercraft_config::{BusConfig, Config, DeviceRef, FxConfig, Sink, Source, StripConfig};
 use mixercraft_core::engine::{Command, EngineHandle, engine};
 use mixercraft_core::fifo::{FifoSpec, fifo};
 use mixercraft_core::fx::FxParams;
 use mixercraft_core::mixer::{BusSpec, Mixer, MixerCommand, MixerLayout, MixerMeters, StripSpec};
 use mixercraft_core::stats::FifoStats;
 use mixercraft_ipc::{
-    BusStatus, DeviceStatus, DeviceSummary, EngineState, EngineStatus, ErrorCode, FifoStatus, Level, MeterSnapshot,
-    RecoveryEvent, Request, Response, StripStatus,
+    BusStatus, DeviceChoice, DeviceStatus, DeviceSummary, EngineState, EngineStatus, ErrorCode, FifoStatus, Level,
+    MeterSnapshot, RecoveryEvent, Request, Response, StripStatus,
 };
 use mixercraft_platform::{AudioSystem, DeviceSelector, FaultKind, OpenStream, StreamFault, StreamInfo, StreamRequest};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::clock::{SharedCore, SoftwareClock, drive};
 
@@ -88,9 +88,19 @@ impl Role {
 }
 
 enum SlotState {
-    Running { _stream: Box<OpenStream>, since: Instant, direct_master: bool },
-    Waiting { retry_at: Instant },
-    Failed { retry_at: Instant },
+    Running {
+        _stream: Box<OpenStream>,
+        since: Instant,
+        direct_master: bool,
+    },
+    Waiting {
+        retry_at: Instant,
+    },
+    Failed {
+        retry_at: Instant,
+    },
+    /// No device selected (the user chose "none"); never opened.
+    Unused,
 }
 
 struct Slot {
@@ -130,8 +140,17 @@ struct Opened {
     command: Command,
 }
 
+/// Identifies an opened stream across all slots (slots can be removed, so
+/// events cannot refer to them by index).
+fn next_generation() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Longest strip or bus name accepted.
+const MAX_NAME_CHARS: usize = 32;
+
 struct DeviceEvent {
-    slot: usize,
     generation: u64,
     fault: StreamFault,
 }
@@ -329,6 +348,7 @@ impl Supervisor {
             self.report_fifo_events(i);
             let due = match self.slots[i].state {
                 SlotState::Waiting { retry_at } | SlotState::Failed { retry_at } => retry_at <= now,
+                SlotState::Unused => false,
                 SlotState::Running { since, .. } => {
                     if now - since > HEALTHY_AFTER {
                         self.slots[i].attempts = 0;
@@ -454,8 +474,9 @@ impl Supervisor {
     }
 
     fn on_fault(&mut self, ev: DeviceEvent) {
-        let Some(slot) = self.slots.get(ev.slot) else { return };
-        if slot.generation != ev.generation || !matches!(slot.state, SlotState::Running { .. }) {
+        let Some(i) = self.slots.iter().position(|s| s.generation == ev.generation) else { return };
+        let slot = &self.slots[i];
+        if !matches!(slot.state, SlotState::Running { .. }) {
             return; // stale event from a stream that was already replaced
         }
         match ev.fault.kind {
@@ -468,7 +489,7 @@ impl Supervisor {
                 self.log_event(&label, "backend xrun", &ev.fault.message);
             }
             FaultKind::DeviceLost | FaultKind::StreamInvalidated | FaultKind::Other => {
-                self.fail_slot(ev.slot, ev.fault.message);
+                self.fail_slot(i, ev.fault.message);
             }
         }
     }
@@ -513,11 +534,11 @@ impl Supervisor {
         let profile_ms = self.config.engine.latency_profile.fifo_target_ms();
         let engine_rate = self.sample_rate;
         let slot = &mut self.slots[i];
-        slot.generation += 1;
-        let (gen_, idx) = (slot.generation, i);
+        slot.generation = next_generation();
+        let gen_ = slot.generation;
         let tx = self.events_tx.clone();
         let on_error = move |fault: StreamFault| {
-            let _ = tx.send(DeviceEvent { slot: idx, generation: gen_, fault });
+            let _ = tx.send(DeviceEvent { generation: gen_, fault });
         };
         let selector = slot.selector.clone();
         let role = slot.role;
@@ -653,6 +674,222 @@ impl Supervisor {
         }
     }
 
+    /// Closes slot `i`'s stream (if any) and detaches it from the engine.
+    /// Pending device events for the old stream become stale.
+    fn release_slot(&mut self, i: usize) {
+        let slot = &mut self.slots[i];
+        let running = matches!(slot.state, SlotState::Running { .. });
+        let was_direct = matches!(slot.state, SlotState::Running { direct_master: true, .. });
+        slot.generation = next_generation();
+        slot.state = SlotState::Unused;
+        slot.fifo = None;
+        slot.info = None;
+        slot.attempts = 0;
+        slot.last_error = None;
+        slot.seen_xruns = (0, 0);
+        slot.latency = LatencyWatch::default();
+        let role = slot.role;
+        if running {
+            let cmd = match role {
+                Role::Input { strip } => Command::DetachInput { strip },
+                Role::Output { bus } => Command::DetachOutput { bus },
+                Role::Master { .. } if was_direct => Command::SetMasterBus(None),
+                Role::Master { bus } => Command::DetachOutput { bus },
+            };
+            self.send(cmd);
+        }
+    }
+
+    /// Points a strip (`bus == false`) or bus at a different device, or at
+    /// none. The new device is opened on the next tick.
+    fn reassign(&mut self, bus: bool, index: usize, selector: Option<DeviceSelector>, label: String) {
+        let matches = |r: Role| match r {
+            Role::Input { strip } => !bus && strip == index,
+            Role::Output { bus: b } | Role::Master { bus: b } => bus && b == index,
+        };
+        let now = Instant::now();
+        if let Some(i) = self.slots.iter().position(|s| matches(s.role)) {
+            self.release_slot(i);
+            let detail = selector.as_ref().map_or_else(|| "none".to_owned(), ToString::to_string);
+            let slot = &mut self.slots[i];
+            slot.label = label.clone();
+            if let Some(sel) = selector {
+                slot.selector = sel;
+                slot.state = SlotState::Waiting { retry_at: now };
+            }
+            self.log_event(&label, "device changed", &detail);
+        } else if let Some(sel) = selector {
+            let role = if bus {
+                let has_master = self.slots.iter().any(|s| matches!(s.role, Role::Master { .. }));
+                if !has_master && self.config.master_bus_index() == Some(index) {
+                    Role::Master { bus: index }
+                } else {
+                    Role::Output { bus: index }
+                }
+            } else {
+                Role::Input { strip: index }
+            };
+            self.log_event(&label, "device changed", &sel.to_string());
+            self.slots.push(Slot::new(role, label, sel, now));
+        }
+        self.manage_clock();
+    }
+
+    /// Swaps in a mixer built from `config`, which differs from the current
+    /// one by an added strip/bus or the removed `remove_input` /
+    /// `remove_output`. Device slots are renumbered to match.
+    fn reshape(&mut self, config: Config, remove_input: Option<usize>, remove_output: Option<usize>) -> Response {
+        if let Err(e) = config.validate() {
+            return Response::Error { code: ErrorCode::InvalidArgument, message: e.to_string() };
+        }
+        let mixer =
+            match Mixer::new(&layout_from_config(&config), config.engine.max_block_frames as usize, self.sample_rate) {
+                Ok(m) => m,
+                Err(e) => return Response::Error { code: ErrorCode::InvalidArgument, message: e.to_string() },
+            };
+        let meters = mixer.meters();
+        if let Err(c) = self.handle.send(Command::Reshape { mixer: Box::new(mixer), remove_input, remove_output }) {
+            drop(c);
+            return Response::Error { code: ErrorCode::Busy, message: "engine command queue full".into() };
+        }
+        // The engine has dropped the removed FIFO; close its device and
+        // renumber the remaining slots.
+        let shift = |idx: &mut usize, removed: Option<usize>| {
+            if removed.is_some_and(|r| *idx > r) {
+                *idx -= 1;
+            }
+        };
+        self.slots.retain(|s| match s.role {
+            Role::Input { strip } => Some(strip) != remove_input,
+            Role::Output { bus } | Role::Master { bus } => Some(bus) != remove_output,
+        });
+        for slot in &mut self.slots {
+            match &mut slot.role {
+                Role::Input { strip } => shift(strip, remove_input),
+                Role::Output { bus } | Role::Master { bus } => shift(bus, remove_output),
+            }
+        }
+        self.meters = meters;
+        self.config = config;
+        self.dirty_since = Some(Instant::now());
+        self.manage_clock();
+        Response::Ok
+    }
+
+    fn add_strip(&mut self, name: &str) -> Response {
+        let mut config = self.config.clone();
+        let name =
+            if name.trim().is_empty() { format!("Input {}", config.strips.len() + 1) } else { name.trim().into() };
+        config.strips.push(StripConfig {
+            name: name.clone(),
+            source: Source::None,
+            channels: 2,
+            gain_db: 0.0,
+            mute: false,
+            solo: false,
+            routes: Vec::new(),
+            fx: FxConfig::default(),
+        });
+        let r = self.reshape(config, None, None);
+        if matches!(r, Response::Ok) {
+            info!(strip = %name, "strip added");
+        }
+        r
+    }
+
+    fn add_bus(&mut self, name: &str) -> Response {
+        let mut config = self.config.clone();
+        let id = (1..).map(|n| format!("A{n}")).find(|id| config.bus_index(id).is_none()).unwrap_or_default();
+        let name =
+            if name.trim().is_empty() { format!("Output {}", config.buses.len() + 1) } else { name.trim().into() };
+        config.buses.push(BusConfig {
+            id,
+            name: name.clone(),
+            sink: Sink::None,
+            channels: 2,
+            gain_db: 0.0,
+            mute: false,
+        });
+        let r = self.reshape(config, None, None);
+        if matches!(r, Response::Ok) {
+            info!(bus = %name, "bus added");
+        }
+        r
+    }
+
+    fn remove_strip(&mut self, i: usize) -> Response {
+        if i >= self.config.strips.len() {
+            return Response::Error { code: ErrorCode::InvalidArgument, message: "no such strip".into() };
+        }
+        let mut config = self.config.clone();
+        let removed = config.strips.remove(i);
+        let r = self.reshape(config, Some(i), None);
+        if matches!(r, Response::Ok) {
+            info!(strip = %removed.name, "strip removed");
+            self.log_event(&removed.name, "removed", "strip removed");
+        }
+        r
+    }
+
+    fn remove_bus(&mut self, b: usize) -> Response {
+        if b >= self.config.buses.len() {
+            return Response::Error { code: ErrorCode::InvalidArgument, message: "no such bus".into() };
+        }
+        if self.config.master_bus_index() == Some(b) {
+            return Response::Error {
+                code: ErrorCode::InvalidArgument,
+                message: "the master bus clocks the engine and cannot be removed".into(),
+            };
+        }
+        let mut config = self.config.clone();
+        let removed = config.buses.remove(b);
+        for s in &mut config.strips {
+            s.routes.retain(|r| *r != removed.id);
+        }
+        // Keep the same master bus (it is chosen by id, or as the first bus
+        // with a device).
+        if config.engine.master_bus.is_none() {
+            let old_master = self.config.master_bus_index().map(|m| self.config.buses[m].id.clone());
+            config.engine.master_bus = old_master;
+        }
+        let r = self.reshape(config, None, Some(b));
+        if matches!(r, Response::Ok) {
+            info!(bus = %removed.name, "bus removed");
+            self.log_event(&removed.name, "removed", "bus removed");
+        }
+        r
+    }
+
+    fn rename(&mut self, bus: bool, i: usize, name: &str) -> Response {
+        let name = name.trim();
+        if name.is_empty() || name.chars().count() > MAX_NAME_CHARS {
+            return Response::Error {
+                code: ErrorCode::InvalidArgument,
+                message: format!("names must have 1 to {MAX_NAME_CHARS} characters"),
+            };
+        }
+        let target = if bus {
+            self.config.buses.get_mut(i).map(|b| &mut b.name)
+        } else {
+            self.config.strips.get_mut(i).map(|s| &mut s.name)
+        };
+        let Some(target) = target else {
+            return Response::Error { code: ErrorCode::InvalidArgument, message: "no such strip or bus".into() };
+        };
+        *target = name.into();
+        for slot in &mut self.slots {
+            let ours = match slot.role {
+                Role::Input { strip } => !bus && strip == i,
+                Role::Output { bus: b } | Role::Master { bus: b } => bus && b == i,
+            };
+            if ours {
+                slot.label = name.into();
+            }
+        }
+        self.dirty_since = Some(Instant::now());
+        Response::Ok
+    }
+
     fn send(&mut self, cmd: Command) {
         if let Err(c) = self.handle.send(cmd) {
             // The queue holds 256 commands and is drained every cycle; being
@@ -702,12 +939,47 @@ impl Supervisor {
     }
 
     fn handle_request(&mut self, req: Request) -> Response {
+        if !matches!(req, Request::Status | Request::Meters | Request::Devices) {
+            debug!(?req, "request");
+        }
         let invalid = |m: &str| Response::Error { code: ErrorCode::InvalidArgument, message: m.into() };
         let strips = self.config.strips.len();
         let buses = self.config.buses.len();
         let gain_ok = |db: f32| db.is_finite() && (-200.0..=24.0).contains(&db);
         let cmd = match req {
             Request::Hello { .. } | Request::Shutdown => return Response::Ok,
+            Request::SetStripSource { strip, choice } => {
+                let i = usize::from(strip);
+                let Some(s) = self.config.strips.get_mut(i) else { return invalid("no such strip") };
+                s.source = match choice {
+                    DeviceChoice::None => Source::None,
+                    DeviceChoice::Default => Source::DefaultInput,
+                    DeviceChoice::Device { id, name } => Source::Device(DeviceRef { id, name }),
+                };
+                let (selector, label) = (selector_for_source(&s.source), s.name.clone());
+                self.reassign(false, i, selector, label);
+                self.dirty_since = Some(Instant::now());
+                return Response::Ok;
+            }
+            Request::SetBusSink { bus, choice } => {
+                let i = usize::from(bus);
+                let Some(b) = self.config.buses.get_mut(i) else { return invalid("no such bus") };
+                b.sink = match choice {
+                    DeviceChoice::None => Sink::None,
+                    DeviceChoice::Default => Sink::DefaultOutput,
+                    DeviceChoice::Device { id, name } => Sink::Device(DeviceRef { id, name }),
+                };
+                let (selector, label) = (selector_for_sink(&b.sink), b.name.clone());
+                self.reassign(true, i, selector, label);
+                self.dirty_since = Some(Instant::now());
+                return Response::Ok;
+            }
+            Request::AddStrip { name } => return self.add_strip(&name),
+            Request::AddBus { name } => return self.add_bus(&name),
+            Request::RemoveStrip { strip } => return self.remove_strip(usize::from(strip)),
+            Request::RemoveBus { bus } => return self.remove_bus(usize::from(bus)),
+            Request::RenameStrip { strip, name } => return self.rename(false, usize::from(strip), &name),
+            Request::RenameBus { bus, name } => return self.rename(true, usize::from(bus), &name),
             Request::Status => return Response::Status(Box::new(self.status())),
             Request::Meters => return Response::Meters(self.meter_snapshot()),
             Request::Devices => {
@@ -815,7 +1087,7 @@ impl Supervisor {
 
     fn status(&self) -> EngineStatus {
         let e = self.handle.stats().snapshot();
-        let all_running = self.slots.iter().all(|s| matches!(s.state, SlotState::Running { .. }));
+        let all_running = self.slots.iter().all(|s| matches!(s.state, SlotState::Running { .. } | SlotState::Unused));
         let state = if all_running {
             EngineState::Running
         } else if self.started.elapsed() < Duration::from_secs(3) && self.recovery_log.is_empty() {
@@ -858,6 +1130,7 @@ impl Supervisor {
             devices: self
                 .slots
                 .iter()
+                .filter(|s| !matches!(s.state, SlotState::Unused))
                 .map(|s| DeviceStatus {
                     name: s.info.as_ref().map_or_else(|| s.selector.to_string(), |i| i.device_name.clone()),
                     role: s.role.name().into(),
@@ -866,6 +1139,7 @@ impl Supervisor {
                         SlotState::Waiting { .. } if s.attempts == 0 => "starting",
                         SlotState::Waiting { .. } => "recovering",
                         SlotState::Failed { .. } => "failed",
+                        SlotState::Unused => "unused",
                     }
                     .into(),
                     sample_rate: s.info.as_ref().map_or(0, |i| i.sample_rate),
@@ -905,19 +1179,31 @@ impl Supervisor {
                         eq_mid_db: s.fx.eq_mid_db,
                         eq_high_db: s.fx.eq_high_db,
                     },
+                    source_choice: match &s.source {
+                        Source::None => DeviceChoice::None,
+                        Source::DefaultInput => DeviceChoice::Default,
+                        Source::Device(d) => DeviceChoice::Device { id: d.id.clone(), name: d.name.clone() },
+                    },
                 })
                 .collect(),
             buses: self
                 .config
                 .buses
                 .iter()
-                .map(|b| BusStatus {
+                .enumerate()
+                .map(|(i, b)| BusStatus {
+                    master: self.config.master_bus_index() == Some(i),
                     id: b.id.clone(),
                     name: b.name.clone(),
                     sink: sink_label(&b.sink),
                     channels: b.channels,
                     gain_db: b.gain_db,
                     mute: b.mute,
+                    sink_choice: match &b.sink {
+                        Sink::None => DeviceChoice::None,
+                        Sink::DefaultOutput => DeviceChoice::Default,
+                        Sink::Device(d) => DeviceChoice::Device { id: d.id.clone(), name: d.name.clone() },
+                    },
                 })
                 .collect(),
             recovery_events: self.recovery_log.iter().cloned().collect(),
@@ -977,6 +1263,73 @@ mod tests {
         assert_eq!(l.strips[0].routes, 0b11);
         assert_eq!(l.buses[1].channels, 1);
         assert!(l.buses[1].mute);
+    }
+
+    /// A supervisor with no devices configured (nothing is opened).
+    fn deviceless() -> Supervisor {
+        let mut c = Config::default();
+        c.strips[0].source = Source::None;
+        c.buses[0].sink = Sink::None;
+        c.engine.master_bus = Some("A1".into());
+        Supervisor::new(c, None, Instant::now()).unwrap()
+    }
+
+    fn ok(r: Response) {
+        assert!(matches!(r, Response::Ok), "{r:?}");
+    }
+
+    #[test]
+    fn strips_and_buses_can_be_added_renamed_and_removed() {
+        let mut s = deviceless();
+        ok(s.handle_request(Request::AddStrip { name: "Game".into() }));
+        ok(s.handle_request(Request::AddStrip { name: String::new() }));
+        ok(s.handle_request(Request::AddBus { name: "Stream".into() }));
+        ok(s.handle_request(Request::AddBus { name: "Record".into() }));
+        assert_eq!(s.config.strips.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Input", "Game", "Input 3"]);
+        assert_eq!(s.config.buses.iter().map(|b| b.id.as_str()).collect::<Vec<_>>(), ["A1", "A2", "A3"]);
+        assert_eq!(s.meters.strips.len(), 3);
+        assert_eq!(s.meters.buses.len(), 3);
+
+        ok(s.handle_request(Request::SetRoute { strip: 1, bus: 1, enabled: true }));
+        ok(s.handle_request(Request::SetRoute { strip: 1, bus: 2, enabled: true }));
+        ok(s.handle_request(Request::RenameStrip { strip: 1, name: "  Discord ".into() }));
+        ok(s.handle_request(Request::RenameBus { bus: 2, name: "OBS".into() }));
+        assert_eq!(s.config.strips[1].name, "Discord");
+        assert_eq!(s.config.buses[2].name, "OBS");
+        assert!(matches!(
+            s.handle_request(Request::RenameStrip { strip: 0, name: " ".into() }),
+            Response::Error { .. }
+        ));
+
+        // Removing bus A2 drops it from routes; the master cannot go.
+        ok(s.handle_request(Request::RemoveBus { bus: 1 }));
+        assert_eq!(s.config.strips[1].routes, ["A3"]);
+        assert!(matches!(s.handle_request(Request::RemoveBus { bus: 0 }), Response::Error { .. }));
+        ok(s.handle_request(Request::RemoveStrip { strip: 0 }));
+        assert_eq!(s.config.strips[0].name, "Discord");
+        assert_eq!(s.meters.strips.len(), 2);
+        assert_eq!(s.meters.buses.len(), 2);
+        // The next bus gets the free id again.
+        ok(s.handle_request(Request::AddBus { name: String::new() }));
+        assert_eq!(s.config.buses[2].id, "A2");
+        assert!(matches!(s.handle_request(Request::RemoveStrip { strip: 9 }), Response::Error { .. }));
+    }
+
+    #[test]
+    fn removing_a_strip_renumbers_device_slots() {
+        let mut s = deviceless();
+        ok(s.handle_request(Request::AddStrip { name: "B".into() }));
+        ok(s.handle_request(Request::AddStrip { name: "C".into() }));
+        s.reassign(false, 2, Some(DeviceSelector::DefaultInput), "C".into());
+        s.reassign(false, 0, Some(DeviceSelector::DefaultInput), "Input".into());
+        ok(s.handle_request(Request::RemoveStrip { strip: 1 }));
+        let roles: Vec<Role> = s.slots.iter().map(|x| x.role).collect();
+        assert!(roles.contains(&Role::Input { strip: 0 }));
+        assert!(roles.contains(&Role::Input { strip: 1 }), "strip 2 became strip 1: {roles:?}");
+        ok(s.handle_request(Request::RemoveStrip { strip: 0 }));
+        let roles: Vec<Role> = s.slots.iter().map(|x| x.role).collect();
+        assert_eq!(roles, [Role::Input { strip: 0 }]);
+        assert_eq!(s.slots[0].label, "C");
     }
 
     #[test]

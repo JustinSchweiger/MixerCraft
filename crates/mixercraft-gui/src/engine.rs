@@ -10,13 +10,15 @@ use std::process::Command;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use mixercraft_ipc::{Client, EngineStatus, IpcError, Request, Response};
+use mixercraft_ipc::{Client, DeviceChoice, DeviceSummary, EngineStatus, IpcError, Request, Response};
 
 use crate::meters::Channel;
 
 const METER_INTERVAL: Duration = Duration::from_millis(33);
 const STATUS_INTERVAL: Duration = Duration::from_millis(500);
 const RECONNECT_INTERVAL: Duration = Duration::from_millis(1000);
+/// How often the device list is refreshed (plugging in a headset).
+const DEVICES_INTERVAL: Duration = Duration::from_secs(5);
 
 /// A user action to forward to the engine.
 #[derive(Debug, Clone, PartialEq)]
@@ -28,6 +30,14 @@ pub enum Cmd {
     StripSolo(u16, bool),
     Route { strip: u16, bus: u16, on: bool },
     StripFx(u16, mixercraft_ipc::StripFx),
+    StripSource(u16, DeviceChoice),
+    BusSink(u16, DeviceChoice),
+    AddStrip,
+    AddBus,
+    RemoveStrip(u16),
+    RemoveBus(u16),
+    RenameStrip(u16, String),
+    RenameBus(u16, String),
     StartEngine,
     StopEngine,
 }
@@ -41,6 +51,10 @@ pub enum Update {
     Status(Box<EngineStatus>),
     /// Meter display values per strip and bus: `[left, right, left peak, right peak]`.
     Meters { strips: Vec<[f32; 4]>, buses: Vec<[f32; 4]> },
+    /// Devices the engine can open.
+    Devices(Vec<DeviceSummary>),
+    /// The engine refused a request; show why.
+    Notice(String),
 }
 
 /// Keeps only the last fader value per target; other commands keep order.
@@ -71,6 +85,14 @@ fn request_for(cmd: &Cmd) -> Option<Request> {
         Cmd::StripSolo(strip, solo) => Request::SetStripSolo { strip, solo },
         Cmd::Route { strip, bus, on } => Request::SetRoute { strip, bus, enabled: on },
         Cmd::StripFx(strip, fx) => Request::SetStripFx { strip, fx },
+        Cmd::StripSource(strip, ref choice) => Request::SetStripSource { strip, choice: choice.clone() },
+        Cmd::BusSink(bus, ref choice) => Request::SetBusSink { bus, choice: choice.clone() },
+        Cmd::AddStrip => Request::AddStrip { name: String::new() },
+        Cmd::AddBus => Request::AddBus { name: String::new() },
+        Cmd::RemoveStrip(strip) => Request::RemoveStrip { strip },
+        Cmd::RemoveBus(bus) => Request::RemoveBus { bus },
+        Cmd::RenameStrip(strip, ref name) => Request::RenameStrip { strip, name: name.clone() },
+        Cmd::RenameBus(bus, ref name) => Request::RenameBus { bus, name: name.clone() },
         Cmd::StopEngine => Request::Shutdown,
         Cmd::StartEngine => return None,
     })
@@ -104,6 +126,7 @@ pub fn run(rx: &Receiver<Cmd>, deliver: &dyn Fn(Update)) {
     let mut last_meter = Instant::now();
     let mut next_meter = Instant::now();
     let mut next_status = Instant::now();
+    let mut next_devices = Instant::now();
 
     loop {
         let Some(c) = client.as_mut() else {
@@ -112,6 +135,7 @@ pub fn run(rx: &Receiver<Cmd>, deliver: &dyn Fn(Update)) {
                     client = Some(c);
                     announced_disconnect = false;
                     next_status = Instant::now();
+                    next_devices = Instant::now();
                     continue;
                 }
                 Err(_) if !announced_disconnect => {
@@ -151,8 +175,14 @@ pub fn run(rx: &Receiver<Cmd>, deliver: &dyn Fn(Update)) {
         let mut failed = false;
         for cmd in coalesce(pending) {
             let Some(req) = request_for(&cmd) else { continue };
+            let reshapes = matches!(cmd, Cmd::AddStrip | Cmd::AddBus | Cmd::RemoveStrip(_) | Cmd::RemoveBus(_));
             match c.request(&req) {
-                Ok(_) | Err(IpcError::Remote { .. }) => {}
+                Ok(_) => {
+                    if reshapes {
+                        next_status = Instant::now(); // show the new layout at once
+                    }
+                }
+                Err(IpcError::Remote { message, .. }) => deliver(Update::Notice(message)),
                 Err(_) => {
                     failed = true;
                     break;
@@ -182,6 +212,14 @@ pub fn run(rx: &Receiver<Cmd>, deliver: &dyn Fn(Update)) {
                 Err(_) => failed = true,
             }
             next_status = now + STATUS_INTERVAL;
+        }
+        if !failed && now >= next_devices {
+            match c.request(&Request::Devices) {
+                Ok(Response::Devices { devices }) => deliver(Update::Devices(devices)),
+                Ok(_) | Err(IpcError::Remote { .. }) => {}
+                Err(_) => failed = true,
+            }
+            next_devices = now + DEVICES_INTERVAL;
         }
         if failed {
             client = None;

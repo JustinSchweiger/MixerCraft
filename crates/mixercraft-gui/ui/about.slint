@@ -1,0 +1,48 @@
+import { Theme } from "theme.slint";
+import { AboutSlint } from "std-widgets.slint";
+
+export component AboutView inherits Rectangle {
+    in property <string> version;
+    border-radius: 12px;
+    background: Theme.section;
+    border-width: 1px;
+    border-color: Theme.section-border;
+    VerticalLayout {
+        alignment: center;
+        spacing: 14px;
+        padding: 24px;
+        HorizontalLayout {
+            alignment: center;
+            Image { source: @image-url("icon.png"); width: 72px; height: 72px; }
+        }
+        HorizontalLayout {
+            alignment: center;
+            spacing: 0px;
+            Text { text: "Mixer"; font-size: 26px; font-weight: 600; color: Theme.text; }
+            Text { text: "Craft"; font-size: 26px; font-weight: 600; color: Theme.accent; }
+        }
+        Text {
+            text: "Version " + root.version;
+            font-size: Theme.font;
+            color: Theme.text-mid;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "A cross-platform audio mixer. All audio runs in the mixercraftd engine;\nthis window can be closed at any time without interrupting sound.";
+            font-size: Theme.font;
+            color: Theme.text-dim;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "Licensed under MIT OR Apache-2.0.";
+            font-size: Theme.font-small;
+            color: Theme.text-dim;
+            horizontal-alignment: center;
+        }
+        Rectangle { height: 8px; }
+        HorizontalLayout {
+            alignment: center;
+            AboutSlint { }
+        }
+    }
+}

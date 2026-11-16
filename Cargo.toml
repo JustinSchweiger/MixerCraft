@@ -33,7 +33,7 @@ cpal = "0.18.2"
 directories = "6.0.0"
 interprocess = "2.2"
 rtrb = "0.4.1"
-slint = { version = "1.19.0", default-features = false, features = ["std", "backend-winit", "renderer-software", "accessibility", "compat-1-2"] }
+slint = { version = "~1.19.0", default-features = false, features = ["std", "backend-winit", "renderer-software", "accessibility", "compat-1-2", "unstable-winit-030"] }
 slint-build = "1.19.0"
 tray-icon = "0.26.1"
 png = "0.18.1"

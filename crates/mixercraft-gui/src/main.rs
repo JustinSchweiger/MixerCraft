@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use mixercraft_ipc::{EngineState, EngineStatus};
+use mixercraft_ipc::{DeviceChoice, DeviceSummary, EngineState, EngineStatus};
 use slint::{Color, ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::engine::{Cmd, Update};
@@ -47,6 +47,11 @@ const LOCAL_EDIT_GRACE: Duration = Duration::from_millis(1500);
 
 thread_local! {
     static LOCAL_EDITS: RefCell<HashMap<(bool, usize), Instant>> = RefCell::new(HashMap::new());
+    /// What each entry of the input / output device pickers selects.
+    static DEVICE_CHOICES: RefCell<(Vec<DeviceChoice>, Vec<DeviceChoice>)> = const { RefCell::new((Vec::new(), Vec::new())) };
+    /// When the title bar was last pressed (a second press soon after
+    /// toggles maximise).
+    static LAST_TITLE_PRESS: RefCell<Option<Instant>> = const { RefCell::new(None) };
     #[cfg(any(windows, target_os = "macos"))]
     static TRAY: RefCell<Option<tray::Tray>> = const { RefCell::new(None) };
 }
@@ -93,11 +98,46 @@ fn vec_model<T: Clone + 'static>(m: &ModelRc<T>) -> Option<&VecModel<T>> {
     m.as_any().downcast_ref::<VecModel<T>>()
 }
 
-fn strip_view(name: &str, source: &str, db: f32, mute: bool, solo: bool, routes: Vec<bool>) -> StripView {
+/// Text shown in a device picker for a configured device.
+fn choice_text(choice: &DeviceChoice, input: bool) -> String {
+    match choice {
+        DeviceChoice::None => "None".into(),
+        DeviceChoice::Default if input => "Default input".into(),
+        DeviceChoice::Default => "Default output".into(),
+        DeviceChoice::Device { name: Some(name), .. } => name.clone(),
+        DeviceChoice::Device { id: Some(id), .. } => id.clone(),
+        DeviceChoice::Device { .. } => "Unknown device".into(),
+    }
+}
+
+/// Picker entries ("None", the default, then each device) and what each selects.
+fn device_options(devices: &[DeviceSummary], input: bool) -> (Vec<SharedString>, Vec<DeviceChoice>) {
+    let mut names = vec![SharedString::from("None"), SharedString::from(choice_text(&DeviceChoice::Default, input))];
+    let mut choices = vec![DeviceChoice::None, DeviceChoice::Default];
+    for d in devices.iter().filter(|d| if input { d.is_input } else { d.is_output }) {
+        names.push(d.name.as_str().into());
+        choices.push(DeviceChoice::Device { id: Some(d.id.clone()), name: Some(d.name.clone()) });
+    }
+    (names, choices)
+}
+
+fn apply_devices(ui: &MainWindow, devices: &[DeviceSummary]) {
+    let (in_names, in_choices) = device_options(devices, true);
+    let (out_names, out_choices) = device_options(devices, false);
+    if ui.get_input_devices().iter().ne(in_names.iter().cloned()) {
+        ui.set_input_devices(ModelRc::new(VecModel::from(in_names)));
+    }
+    if ui.get_output_devices().iter().ne(out_names.iter().cloned()) {
+        ui.set_output_devices(ModelRc::new(VecModel::from(out_names)));
+    }
+    DEVICE_CHOICES.with(|c| *c.borrow_mut() = (in_choices, out_choices));
+}
+
+fn strip_view(name: &str, device: &str, db: f32, mute: bool, solo: bool, routes: Vec<bool>) -> StripView {
     with_fx(
         StripView {
             name: name.into(),
-            source: source.into(),
+            device: device.into(),
             pos: fader_law::db_to_pos(db),
             db,
             db_text: fader_law::knob_text(db).into(),
@@ -146,10 +186,13 @@ fn sync_rows(current: ModelRc<StripView>, fresh: Vec<StripView>, bus: bool) -> O
             row.low = old.low;
             row.mid = old.mid;
             row.high = old.high;
+            row.device = old.device.clone();
+            row.name = old.name.clone();
         }
         let same_routes = old.routes.iter().eq(row.routes.iter());
         let changed = old.name != row.name
-            || old.source != row.source
+            || old.master != row.master
+            || old.device != row.device
             || old.pos != row.pos
             || old.db_text != row.db_text
             || old.mute != row.mute
@@ -177,7 +220,8 @@ fn apply_status(ui: &MainWindow, s: &EngineStatus) {
         .iter()
         .map(|st| {
             let routes = (0..s.buses.len()).map(|b| st.routes.contains(&(b as u16))).collect();
-            with_fx(strip_view(&st.name, &st.source, st.gain_db, st.mute, st.solo, routes), &st.fx)
+            let device = choice_text(&st.source_choice, true);
+            with_fx(strip_view(&st.name, &device, st.gain_db, st.mute, st.solo, routes), &st.fx)
         })
         .collect();
     let n_strips = strips.len();
@@ -188,7 +232,10 @@ fn apply_status(ui: &MainWindow, s: &EngineStatus) {
     let buses: Vec<StripView> = s
         .buses
         .iter()
-        .map(|b| strip_view(&b.name, &format!("{} · {}", b.id, b.sink), b.gain_db, b.mute, false, Vec::new()))
+        .map(|b| StripView {
+            master: b.master,
+            ..strip_view(&b.name, &choice_text(&b.sink_choice, false), b.gain_db, b.mute, false, Vec::new())
+        })
         .collect();
     let n_buses = buses.len();
     if let Some(m) = sync_rows(ui.get_buses(), buses, true) {
@@ -292,8 +339,30 @@ fn apply(ui: &MainWindow, update: Update) {
             apply_meters(&ui.get_bus_meters(), &buses);
             return;
         }
+        Update::Devices(devices) => {
+            apply_devices(ui, &devices);
+            return;
+        }
+        Update::Notice(text) => {
+            show_notice(ui, text);
+            return;
+        }
     }
     update_tray(ui);
+}
+
+/// Shows a message from the engine for a few seconds.
+fn show_notice(ui: &MainWindow, text: String) {
+    let text = SharedString::from(text);
+    ui.set_notice(text.clone());
+    let w = ui.as_weak();
+    slint::Timer::single_shot(Duration::from_secs(6), move || {
+        if let Some(ui) = w.upgrade()
+            && ui.get_notice() == text
+        {
+            ui.set_notice(SharedString::new());
+        }
+    });
 }
 
 /// Updates one strip row in place for immediate visual feedback.
@@ -423,6 +492,67 @@ fn main() -> Result<(), slint::PlatformError> {
             let _ = t.send(Cmd::StripFx(i as u16, k.to_fx()));
         }
     });
+    let w = ui.as_weak();
+    let t = tx.clone();
+    ui.on_strip_device(move |i, d| {
+        let Some(choice) = DEVICE_CHOICES.with(|c| c.borrow().0.get(d as usize).cloned()) else { return };
+        let text = choice_text(&choice, true);
+        if edit_row(&w.unwrap().get_strips(), i as usize, |r| r.device = text.into()).is_some() {
+            mark_edit(false, i as usize);
+            let _ = t.send(Cmd::StripSource(i as u16, choice));
+        }
+    });
+    let w = ui.as_weak();
+    let t = tx.clone();
+    ui.on_bus_device(move |i, d| {
+        let Some(choice) = DEVICE_CHOICES.with(|c| c.borrow().1.get(d as usize).cloned()) else { return };
+        let text = choice_text(&choice, false);
+        if edit_row(&w.unwrap().get_buses(), i as usize, |r| r.device = text.into()).is_some() {
+            mark_edit(true, i as usize);
+            let _ = t.send(Cmd::BusSink(i as u16, choice));
+        }
+    });
+    let w = ui.as_weak();
+    let t = tx.clone();
+    ui.on_strip_rename(move |i, name| {
+        let name = name.trim().to_owned();
+        if name.is_empty() {
+            return;
+        }
+        if edit_row(&w.unwrap().get_strips(), i as usize, |r| r.name = name.as_str().into()).is_some() {
+            mark_edit(false, i as usize);
+            let _ = t.send(Cmd::RenameStrip(i as u16, name));
+        }
+    });
+    let w = ui.as_weak();
+    let t = tx.clone();
+    ui.on_bus_rename(move |i, name| {
+        let name = name.trim().to_owned();
+        if name.is_empty() {
+            return;
+        }
+        if edit_row(&w.unwrap().get_buses(), i as usize, |r| r.name = name.as_str().into()).is_some() {
+            mark_edit(true, i as usize);
+            let _ = t.send(Cmd::RenameBus(i as u16, name));
+        }
+    });
+    let t = tx.clone();
+    ui.on_strip_remove(move |i| {
+        let _ = t.send(Cmd::RemoveStrip(i as u16));
+    });
+    let t = tx.clone();
+    ui.on_bus_remove(move |i| {
+        let _ = t.send(Cmd::RemoveBus(i as u16));
+    });
+    let t = tx.clone();
+    ui.on_add_strip(move || {
+        let _ = t.send(Cmd::AddStrip);
+    });
+    let t = tx.clone();
+    ui.on_add_bus(move || {
+        let _ = t.send(Cmd::AddBus);
+    });
+    install_window_actions(&ui);
     let t = tx.clone();
     ui.on_start_engine(move || {
         let _ = t.send(Cmd::StartEngine);
@@ -456,11 +586,96 @@ fn main() -> Result<(), slint::PlatformError> {
         }
         slint::CloseRequestResponse::HideWindow
     });
+    let w = ui.as_weak();
+    ui.on_close_window(move || {
+        if has_tray() {
+            if let Some(ui) = w.upgrade() {
+                let _ = ui.hide();
+            }
+        } else {
+            let _ = slint::quit_event_loop();
+        }
+    });
 
     if !(start_hidden && cfg!(any(windows, target_os = "macos"))) {
         ui.show()?;
     }
     slint::run_event_loop_until_quit()
+}
+
+/// Title-bar dragging, the window buttons and edge resizing of the
+/// frameless window.
+fn install_window_actions(ui: &MainWindow) {
+    use slint::winit_030::WinitWindowAccessor;
+    use slint::winit_030::winit::window::ResizeDirection;
+
+    /// Two presses within this time count as a double click.
+    const DOUBLE_PRESS: Duration = Duration::from_millis(400);
+
+    ui.set_version(env!("CARGO_PKG_VERSION").into());
+
+    let w = ui.as_weak();
+    ui.on_drag_window(move || {
+        let Some(ui) = w.upgrade() else { return };
+        let now = Instant::now();
+        let double = LAST_TITLE_PRESS.with(|p| {
+            let double = p.borrow().is_some_and(|t| now - t < DOUBLE_PRESS);
+            *p.borrow_mut() = if double { None } else { Some(now) };
+            double
+        });
+        if double {
+            ui.invoke_toggle_maximize();
+        } else {
+            ui.window().with_winit_window(|w| {
+                let _ = w.drag_window();
+            });
+        }
+    });
+    let w = ui.as_weak();
+    ui.on_minimize(move || {
+        if let Some(ui) = w.upgrade() {
+            ui.window().set_minimized(true);
+        }
+    });
+    let w = ui.as_weak();
+    ui.on_toggle_maximize(move || {
+        if let Some(ui) = w.upgrade() {
+            let maximized = !ui.window().is_maximized();
+            ui.window().set_maximized(maximized);
+            ui.set_max_state(maximized);
+        }
+    });
+    let w = ui.as_weak();
+    ui.on_resize(move |dir| {
+        let Some(ui) = w.upgrade() else { return };
+        let dir = match dir {
+            0 => ResizeDirection::North,
+            1 => ResizeDirection::South,
+            2 => ResizeDirection::East,
+            3 => ResizeDirection::West,
+            4 => ResizeDirection::NorthEast,
+            5 => ResizeDirection::NorthWest,
+            6 => ResizeDirection::SouthEast,
+            _ => ResizeDirection::SouthWest,
+        };
+        ui.window().with_winit_window(|w| {
+            let _ = w.drag_resize_window(dir);
+        });
+    });
+
+    // Keeps the maximise button right when the system changes the state
+    // (Win+Up, snapping).
+    let w = ui.as_weak();
+    let timer = slint::Timer::default();
+    timer.start(slint::TimerMode::Repeated, Duration::from_millis(300), move || {
+        if let Some(ui) = w.upgrade() {
+            let maximized = ui.window().is_maximized();
+            if ui.get_max_state() != maximized {
+                ui.set_max_state(maximized);
+            }
+        }
+    });
+    std::mem::forget(timer);
 }
 
 /// Creates the tray once the event loop runs and routes its events.

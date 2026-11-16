@@ -64,6 +64,30 @@ enum Cmd {
         #[arg(long, allow_negative_numbers = true)]
         high: Option<f32>,
     },
+    /// Choose the capture device of a strip: "none", "default", or a device
+    /// name or id (see `mixercraft devices`).
+    Source { strip: u16, device: String },
+    /// Choose the playback device of a bus: "none", "default", or a device
+    /// name or id.
+    Sink { bus: u16, device: String },
+    /// Add an input strip (no device, not routed).
+    AddStrip {
+        #[arg(default_value = "")]
+        name: String,
+    },
+    /// Add an output bus (no device).
+    AddBus {
+        #[arg(default_value = "")]
+        name: String,
+    },
+    /// Remove a strip; later strips move down by one.
+    RemoveStrip { strip: u16 },
+    /// Remove a bus (not the master bus).
+    RemoveBus { bus: u16 },
+    /// Rename a strip.
+    RenameStrip { strip: u16, name: String },
+    /// Rename a bus.
+    RenameBus { bus: u16, name: String },
     /// Platform feature support of this build (no engine needed).
     Capabilities,
     /// Audio devices on this machine, without a running engine.
@@ -152,6 +176,14 @@ fn main() -> anyhow::Result<()> {
         Cmd::BusMute { bus, state } => Request::SetBusMute { bus, mute: state.into() },
         Cmd::Solo { strip, state } => Request::SetStripSolo { strip, solo: state.into() },
         Cmd::Route { strip, bus, state } => Request::SetRoute { strip, bus, enabled: state.into() },
+        Cmd::Source { strip, ref device } => Request::SetStripSource { strip, choice: device_choice(device) },
+        Cmd::Sink { bus, ref device } => Request::SetBusSink { bus, choice: device_choice(device) },
+        Cmd::AddStrip { ref name } => Request::AddStrip { name: name.clone() },
+        Cmd::AddBus { ref name } => Request::AddBus { name: name.clone() },
+        Cmd::RemoveStrip { strip } => Request::RemoveStrip { strip },
+        Cmd::RemoveBus { bus } => Request::RemoveBus { bus },
+        Cmd::RenameStrip { strip, ref name } => Request::RenameStrip { strip, name: name.clone() },
+        Cmd::RenameBus { bus, ref name } => Request::RenameBus { bus, name: name.clone() },
         Cmd::Fx { strip, gate, comp, low, mid, high } => {
             let Response::Status(s) = c.request(&Request::Status)? else { anyhow::bail!("unexpected answer") };
             let mut fx = s.strips.get(usize::from(strip)).context("no such strip")?.fx;
@@ -313,4 +345,15 @@ fn autostart(action: &AutostartCmd) -> anyhow::Result<()> {
 fn strip_verbatim(p: &std::path::Path) -> String {
     let s = p.to_string_lossy();
     s.strip_prefix(r"\\?\").filter(|rest| !rest.starts_with("UNC")).unwrap_or(&s).to_owned()
+}
+
+/// "none", "default", an id (contains ':' like `wasapi:{...}`) or a name.
+fn device_choice(arg: &str) -> mixercraft_ipc::DeviceChoice {
+    use mixercraft_ipc::DeviceChoice;
+    match arg {
+        "none" => DeviceChoice::None,
+        "default" => DeviceChoice::Default,
+        id if id.contains(':') && id.contains('{') => DeviceChoice::Device { id: Some(id.into()), name: None },
+        name => DeviceChoice::Device { id: None, name: Some(name.into()) },
+    }
 }

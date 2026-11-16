@@ -21,6 +21,21 @@ All notable changes to this project are documented here. The format follows
   longer causes a seconds-long pitch correction.
 
 ### Added
+- Inputs and outputs can be added, renamed and removed while audio runs
+  (GUI "+" cards and right-click menu; `mixercraft add-strip`, `add-bus`,
+  `rename-strip`, `rename-bus`, `remove-strip`, `remove-bus`). The engine
+  swaps in the resized mixer and renumbers device FIFOs in one audio-thread
+  step (`Command::Reshape`, allocation-free). The master bus cannot be
+  removed. Gate/compressor/EQ state of other strips restarts on such a
+  change.
+- Device selection per strip and bus at runtime (GUI dropdowns,
+  `mixercraft source` / `mixercraft sink`, IPC `SetStripSource` /
+  `SetBusSink`); only the changed device is reopened.
+- GUI redesign: frameless window with a custom title bar (drag, double-click
+  to maximise, edge resizing), larger strips, device pickers, About tab
+  (licence and Slint attribution instead of a footer), mouse-wheel control
+  of faders (2 dB per notch) and knobs, engine refusals shown as a banner.
+- The engine logs control requests at debug level.
 - Per-strip gate, compressor (one "amount" control) and 3-band EQ in the
   engine, before the fader; bit-exact when off; configurable from the GUI
   (rotary knobs), the CLI (`mixercraft fx`) and the configuration file.
