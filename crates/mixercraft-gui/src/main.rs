@@ -851,6 +851,10 @@ fn set_gain(row: &mut StripView, pos: f32) -> f32 {
 
 fn main() -> Result<(), slint::PlatformError> {
     let start_hidden = std::env::args().any(|a| a == "--tray");
+    // Wayland/X11 window class: matches `mixercraft.desktop`, so the desktop
+    // shows the launcher's name and icon for the window.
+    #[cfg(target_os = "linux")]
+    let _ = slint::set_xdg_app_id("mixercraft");
 
     // Single instance: if the app is already running, show it and exit.
     let instance = match mixercraft_ipc::gui_instance::claim() {

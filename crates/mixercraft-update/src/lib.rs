@@ -197,12 +197,22 @@ pub fn evaluate(
         }
         None => None,
     };
-    Ok(Check::Available(Release {
-        version: latest,
-        notes: manifest.notes.clone(),
-        notes_url: manifest.notes_url.clone(),
-        asset,
-    }))
+    let notes_url = if manifest.notes_url.trim().is_empty() {
+        release_page(feed_url).unwrap_or_default()
+    } else {
+        manifest.notes_url.clone()
+    };
+    Ok(Check::Available(Release { version: latest, notes: manifest.notes.clone(), notes_url, asset }))
+}
+
+/// The release page for a GitHub Releases feed
+/// (`…/releases/latest/download/latest.json` → `…/releases/latest`), used
+/// when the manifest names no notes page. Platforms without an installer
+/// target send users there.
+#[must_use]
+pub fn release_page(feed_url: &str) -> Option<String> {
+    let base = feed_url.strip_suffix("/releases/latest/download/latest.json")?;
+    base.starts_with("https://github.com/").then(|| format!("{base}/releases/latest"))
 }
 
 fn is_sha256_hex(s: &str) -> bool {

@@ -11,7 +11,8 @@ all outputs whenever the master icon changes.
 | `windows/resources.rs` | Build-script helper (`include!`d by the three `build.rs`) that embeds the icon and version info via `winresource` |
 | `linux/mixercraft.desktop` | Application launcher entry; packages install it to `share/applications/` |
 | `linux/hicolor/<n>x<n>/apps/mixercraft.png` | Icon theme files; packages install them to `share/icons/hicolor/` |
-| `macos/mixercraft.icns` | App bundle icon (`CFBundleIconFile`) for the future macOS bundle |
+| `macos/mixercraft.icns` | App bundle icon (`CFBundleIconFile`); `scripts/package-macos.sh` copies it into `MixerCraft.app/Contents/Resources/` |
 
-No package or bundle installs the Linux and macOS files yet (see
-`docs/feature-matrix.md`, "Installers").
+`scripts/package-linux.sh` installs the Linux files into the `.deb` and the
+portable archive (see `docs/development/releasing.md`). The launcher's
+`StartupWMClass` matches the app id the GUI sets on Linux (`mixercraft`).
