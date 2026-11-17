@@ -39,7 +39,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 use mixercraft_usbip::{AudioPort, DeviceHandle, DeviceSpec, DeviceWatch, Direction, Server, descriptors};
@@ -246,16 +246,48 @@ fn port() -> u16 {
         .unwrap_or(mixercraft_usbip::DEFAULT_PORT)
 }
 
+/// Whether this usbip-win2 can receive in low-latency mode (`attach
+/// --receive-mode low-latency`, newer 0.9.x releases).
+///
+/// The default ("zero-copy") made Windows' audio passes on a virtual device
+/// irregular under CPU load: with a game running, Windows asked applications
+/// for audio 14 times a minute more than 15 ms late (once 32 ms) and skipped
+/// passes, so the game's own stream ran dry and crackled. In low-latency
+/// mode it was 1 to 4 times, at most 20 ms, about as even as a real USB
+/// speaker on the same machine (measured on hardware, alternating runs).
+fn low_latency_supported(exe: &Path) -> bool {
+    static SUPPORTED: OnceLock<bool> = OnceLock::new();
+    *SUPPORTED.get_or_init(|| {
+        let mut cmd = std::process::Command::new(exe);
+        cmd.args(["attach", "--help"]).stdin(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        cmd.output().is_ok_and(|out| {
+            let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+            help_offers_low_latency(&text)
+        })
+    })
+}
+
+fn help_offers_low_latency(help: &str) -> bool {
+    help.contains("--receive-mode") && help.contains("low-latency")
+}
+
 /// Runs `usbip attach` for a device; returns the client's message on failure.
 fn attach(busid: &str) -> Result<(), String> {
     let exe = usbip_exe().ok_or("usbip-win2 is not installed")?;
-    let mut cmd = std::process::Command::new(exe);
+    let mut cmd = std::process::Command::new(&exe);
     // `--once`: no background reattach attempts by the driver; the engine's
     // own recovery reopens devices, with fresh bus ids.
-    cmd.args(["-t", &port().to_string(), "attach", "--once", "-r", "127.0.0.1", "-b", busid])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+    cmd.args(["-t", &port().to_string(), "attach", "--once", "-r", "127.0.0.1", "-b", busid]);
+    if low_latency_supported(&exe) {
+        cmd.args(["--receive-mode", "low-latency"]);
+    }
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -681,6 +713,15 @@ mod tests {
         // Nothing to go by (not Windows, or no arrival time): no failure.
         assert!(arrived_since(None, attached_at));
         assert!(arrived_since(windows(true, None), attached_at));
+    }
+
+    #[test]
+    fn low_latency_mode_is_detected_from_the_help_text() {
+        // usbip-win2 0.9.8.1 `attach --help` (abridged).
+        let help = "--once Excludes: --stop\n  Do not start automatic attach attempts if cannot connect\n\
+                    --receive-mode TEXT:{zero-copy,low-latency} [zero-copy]  Excludes: --stop\n  How to receive data";
+        assert!(help_offers_low_latency(help));
+        assert!(!help_offers_low_latency("--once Excludes: --stop\n  Do not start automatic attach attempts"));
     }
 
     #[test]

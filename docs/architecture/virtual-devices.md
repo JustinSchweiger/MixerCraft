@@ -60,6 +60,16 @@ Chosen because it costs nothing and needs no kernel code of our own
   a Rust-owned buffer corrupted the heap (found on hardware, fixed).
 * The devices exist only while the engine runs; configuration (strips,
   buses, ids, routing) persists in `config.toml` as usual.
+* Timing under load: Windows' audio engine runs a virtual device on the
+  completions of its USB transfers, which travel through usbip-win2. Windows
+  keeps only about one 10 ms transfer of reserve (submits arrive ~8.5 ms
+  before they are due). In usbip-win2's default "zero-copy" receive mode
+  that reserve ran out several times a minute under game load (Windows-side
+  stalls of more than 12 ms; MixerCraft's own packet timer stayed within
+  1.6 ms and loopback TCP within 9 ms), so applications got late or skipped
+  audio requests and crackled. Devices are therefore attached with
+  `--receive-mode low-latency` when the installed client offers it
+  (`attach --help`); completing transfers earlier did not help.
 * Sleep and reconnects: Windows must remove a device's old copy before it
   can detect the device again. On the owner's PC, Windows dropped all
   virtual devices when it began to sleep, the engine reconnected them 0.5 s
