@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Version=1.5
+Version=1.4
 Name=MixerCraft
 GenericName=Audio Mixer
 Comment=Route and mix audio between devices and applications
@@ -9,3 +9,4 @@ Icon=mixercraft
 Terminal=false
 Categories=AudioVideo;Audio;Mixer;
 Keywords=mixer;audio;routing;virtual;microphone;
+StartupWMClass=mixercraft

@@ -144,7 +144,14 @@ fn check(feed: &str, current: &str, installed: bool, available: &mut Option<Rele
         }
         Ok(Check::Available(r)) => {
             let mut notes = r.notes.trim().to_owned();
-            let extra = if r.asset.is_none() {
+            let extra = if mixercraft_update::current_target().is_none() {
+                // Linux and macOS: notify only (ADR 0006).
+                Some(if cfg!(target_os = "macos") {
+                    "Download the new disk image from the release page and drag MixerCraft into Applications again."
+                } else {
+                    "Download the new package from the release page and install it the way you installed this one."
+                })
+            } else if r.asset.is_none() {
                 Some("There is no installer for this platform in this release.")
             } else if !installed {
                 Some("This copy was not installed with the MixerCraft installer, so it cannot update itself.")

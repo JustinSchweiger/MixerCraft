@@ -21,6 +21,17 @@ All notable changes to this project are documented here. The format follows
   them. Tested against PipeWire without audio hardware (WSL2 and a new CI job,
   `scripts/test-pipewire-virtual.sh`), not yet on a desktop with sound
   hardware. Decision: ADR 0009.
+- Linux and macOS packages (preview, tested in CI only): a `.deb` and a
+  portable `.tar.gz` with a per-user `install.sh` for Linux x86_64 and ARM64
+  (`scripts/package-linux.sh`), and a universal, ad-hoc signed `.dmg` for
+  macOS 11+ (`scripts/package-macos.sh`). A manually started "Release
+  packages" workflow builds, smoke-tests and attaches them to a GitHub
+  release. The macOS engine carries its own Info.plist so macOS asks for
+  microphone access. On Linux the window uses the app id `mixercraft`, which
+  matches the launcher.
+- Linux and macOS apps report new versions and link to the release page
+  (notify only); for GitHub feeds without a notes page the link is the latest
+  release page.
 - The window remembers its position, size and maximised state (saved in
   `gui.toml` when it is hidden or the app quits) and reopens there; a
   position that is no longer on any screen (e.g. an unplugged monitor) is

@@ -72,11 +72,28 @@ Download **`MixerCraft-<version>-x64.msi`** from the
 install yourself; the installer tells you if it is missing. They add about 95 ms between two
 applications. Without usbip-win2 MixerCraft works with your physical devices.
 
+### Linux and macOS (preview)
+
+These builds are tested in CI (and Linux in WSL2), not yet on real Linux or Mac hardware.
+
+- **Debian/Ubuntu** (x86_64, ARM64): `sudo apt install ./mixercraft_<version>_amd64.deb`
+  (or `_arm64.deb`). **Other distributions:** unpack `mixercraft-<version>-linux-<arch>.tar.gz` and
+  run `./install.sh` (installs to `~/.local`, no root; `./install.sh --uninstall` removes it).
+  Needs glibc 2.36 and the PipeWire library 0.3.49 or newer (Debian 12, Ubuntu 24.04, Fedora 37
+  and later). **Virtual devices** are PipeWire devices ("MixerCraft <name>" in your sound
+  settings); no driver needed.
+- **macOS 11+** (Apple silicon and Intel): open `MixerCraft-<version>-macos-universal.dmg` and drag
+  MixerCraft into Applications. The app is not notarized (no paid Apple developer account): on the
+  first start macOS blocks it; open **System Settings → Privacy & Security** and click **Open
+  Anyway**. Allow microphone access when asked. No virtual devices on macOS yet.
+- Updates: the app tells you about new versions and links to the release page; install the new
+  package the same way.
+
 ## Documentation
 
 | Guide | Topic |
 |---|---|
-| [releasing.md](docs/development/releasing.md) | Building the installer and publishing a release |
+| [releasing.md](docs/development/releasing.md) | Building the installers and packages, publishing a release |
 | [building.md](docs/development/building.md) | Building from source on each platform |
 | [overview.md](docs/architecture/overview.md) | How the engine, IPC and app fit together |
 | [virtual-devices.md](docs/architecture/virtual-devices.md) | How virtual devices work |
@@ -94,7 +111,8 @@ cargo test --workspace
 ```
 
 Windows installer: `powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1`
-(needs the .NET SDK; see [releasing.md](docs/development/releasing.md)).
+(needs the .NET SDK); Linux packages: `scripts/package-linux.sh`; macOS disk image:
+`scripts/package-macos.sh` (see [releasing.md](docs/development/releasing.md)).
 
 <details>
 <summary><b>Command line examples</b></summary>
