@@ -24,7 +24,7 @@ and runs the hardware-independent tests on all three platforms.
 | Automatic device recovery | ✅ reopen with backoff, stall watchdog | ✅ | ✅ |
 | Engine independent of GUI (IPC) | ✅ | ✅ | ✅ |
 | Low-latency shared mode (IAudioClient3 / MMCSS) | 🗓 native WASAPI backend | n/a | n/a |
-| Virtual endpoints | 🟡 emulated USB audio devices via usbip-win2 (user installs it); verified on hardware; ~95 ms app → MixerCraft → app; default devices restored | 🗓 PipeWire null-sink nodes | 🗓 AudioServerPlugIn |
+| Virtual endpoints | 🟡 emulated USB audio devices via usbip-win2 (user installs it); verified on hardware; ~95 ms app → MixerCraft → app; default devices restored | 🟡 PipeWire `Audio/Sink` and `Audio/Source` nodes owned by the engine (no driver, no config files); tone through sink → engine → source verified against PipeWire 1.0 with its dummy driver (WSL2, CI), not on a desktop with audio hardware; a rename applies on the next open | 🗓 AudioServerPlugIn |
 | Per-application capture | 🗓 WASAPI process loopback | 🗓 PipeWire stream links | 🗓 process taps (macOS 14.2+) |
 | Per-application output routing | 🗓 undocumented API, feature-flagged | 🗓 `target.object` metadata | 🗓 taps + mute original |
 | Autostart with the user session | 🟡 Task Scheduler logon task: registration, settings, start via Task Scheduler and removal verified; start at actual sign-in not yet verified. Desktop app in the tray at sign-in (second task, `--tray`, from the Settings tab or the installer): registration and removal verified through the installer; start at actual sign-in not yet verified | 🟡 systemd user unit; unit file unit-tested, not run on hardware | 🟡 LaunchAgent; plist unit-tested, not run on hardware |
