@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Windows: game and app audio crackled through virtual devices while the
+  PC was busy (e.g. playing a game), but not when played straight to the
+  speakers. MixerCraft passed the audio on unchanged; the crackle was in the
+  application's own stream: Windows' USB-over-IP driver delivered the
+  virtual device's timing unevenly under load, so Windows asked
+  applications for audio late (up to 32 ms) and skipped turns, and games
+  with small buffers ran dry. Virtual devices are now connected in
+  usbip-win2's low-latency receive mode (when the installed usbip-win2 has
+  it): late requests dropped from 14 to 1-4 a minute under the same game
+  load, about as even as a real USB speaker.
+
 ## [0.2.0] - 2026-11-17
 
 ### Added
