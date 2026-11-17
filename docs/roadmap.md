@@ -18,7 +18,9 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 
 ## Next steps, in order
 
-1. Linux and macOS hardware verification of the current engine.
+1. Linux and macOS hardware verification of the current engine, packages,
+   tray, sign-in start and Linux virtual devices
+   ([checklist](development/testing-linux-macos.md)).
 2. Engine autostart per platform (Windows: per-user first, service mode
    with startup-sound timing test; Linux: systemd user unit; macOS:
    LaunchAgent).
