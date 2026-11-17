@@ -306,21 +306,31 @@ pub(crate) fn promote_to_audio_priority() {
     let _ = audio_thread_priority::promote_current_thread_to_real_time(FRAMES_PER_MS as u32 * 10, RATE);
 }
 
+/// Whether the host (rather than the idle clock) moves a device's audio at
+/// `now` (all times in ns since the server epoch): it must not have stopped
+/// streaming (`active`), and must have moved audio recently enough.
+pub(crate) fn host_moves_audio(direction: Direction, active: bool, host_until: u64, host_since: u64, now: u64) -> bool {
+    match direction {
+        Direction::Speaker => active && host_until + IDLE_AFTER.as_nanos() as u64 > now,
+        Direction::Microphone => active && host_until.max(host_since) + MIC_IDLE_AFTER.as_nanos() as u64 > now,
+    }
+}
+
 fn idle_loop(inner: &Inner) {
     promote_to_audio_priority();
     let chunk = IDLE_CHUNK.as_nanos() as u64;
-    let speaker_after = IDLE_AFTER.as_nanos() as u64;
-    let mic_after = MIC_IDLE_AFTER.as_nanos() as u64;
     let mut buf = vec![0.0f32; FRAMES_PER_MS * CHANNELS * IDLE_CHUNK.as_millis() as usize];
     while !inner.stop.load(Ordering::Relaxed) {
         let now = inner.nanos(Instant::now());
         for d in inner.snapshot() {
             let host = d.host_until.load(Ordering::Relaxed);
-            let active = d.host_active.load(Ordering::Relaxed);
-            let streaming = match d.spec.direction {
-                Direction::Speaker => active && host + speaker_after > now,
-                Direction::Microphone => active && host.max(d.host_since.load(Ordering::Relaxed)) + mic_after > now,
-            };
+            let streaming = host_moves_audio(
+                d.spec.direction,
+                d.host_active.load(Ordering::Relaxed),
+                host,
+                d.host_since.load(Ordering::Relaxed),
+                now,
+            );
             d.streaming.store(streaming, Ordering::Relaxed);
             if streaming {
                 d.idle_until.store(host, Ordering::Relaxed);

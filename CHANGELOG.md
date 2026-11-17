@@ -19,6 +19,11 @@ All notable changes to this project are documented here. The format follows
   moved to the primary screen.
 
 ### Fixed
+- CI: the virtual-device test for the explicit-stop handover no longer races
+  a 4 ms window with the wall clock (it failed now and then on slow macOS
+  runners). The streaming decision is a pure function with its own unit test;
+  the protocol test checks the stop flag, which the server sets before it
+  replies.
 - Linux and macOS CI: Windows-only code (`mixercraft-winaudio`'s role list,
   the tray's "stop engine" command) failed the `-D warnings` builds; two
   virtual-device timing tests assumed exact sleep times and failed on busy
