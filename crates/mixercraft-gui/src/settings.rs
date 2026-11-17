@@ -16,17 +16,30 @@ const FILE_NAME: &str = "gui.toml";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GuiSettings {
-    /// The window's close button hides the window into the tray (`true`) or
-    /// quits the app (`false`). Audio keeps running either way.
+    /// The window's close button hides the window into the tray (`true`,
+    /// audio keeps running) or quits the app, which also stops the engine.
     pub close_to_tray: bool,
     /// Meters keep a peak marker for a moment.
     pub peak_hold: bool,
+    /// Where the window was last, restored at start.
+    pub window: Option<WindowGeometry>,
 }
 
 impl Default for GuiSettings {
     fn default() -> Self {
-        Self { close_to_tray: true, peak_hold: true }
+        Self { close_to_tray: true, peak_hold: true, window: None }
     }
+}
+
+/// The window's normal (not maximised) position and size in physical
+/// pixels, and whether it was maximised.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowGeometry {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub maximized: bool,
 }
 
 /// Where the preferences live, if there is a configuration directory.
@@ -69,12 +82,16 @@ mod tests {
         let file = dir.join(FILE_NAME);
         assert_eq!(load(&file), GuiSettings::default());
 
-        let s = GuiSettings { close_to_tray: false, peak_hold: false };
+        let s = GuiSettings {
+            close_to_tray: false,
+            peak_hold: false,
+            window: Some(WindowGeometry { x: -1200, y: 40, width: 1240, height: 780, maximized: true }),
+        };
         save(&file, &s).unwrap();
         assert_eq!(load(&file), s);
 
         std::fs::write(&file, "peak_hold = false\nfuture_key = 3\n").unwrap();
-        assert_eq!(load(&file), GuiSettings { close_to_tray: true, peak_hold: false });
+        assert_eq!(load(&file), GuiSettings { close_to_tray: true, peak_hold: false, window: None });
 
         std::fs::write(&file, "not toml [").unwrap();
         assert_eq!(load(&file), GuiSettings::default());

@@ -98,7 +98,7 @@ impl Tray {
         let menu = Menu::new();
         let open = MenuItem::new("Open mixer", true, None);
         let engine = MenuItem::new(if connected { "Stop engine" } else { "Start engine" }, true, None);
-        let quit = MenuItem::new("Quit (audio keeps running)", true, None);
+        let quit = MenuItem::new("Quit MixerCraft (stops audio)", true, None);
         let mute_items: Vec<CheckMenuItem> = if connected {
             strips.iter().map(|(name, muted)| CheckMenuItem::new(format!("Mute {name}"), true, *muted, None)).collect()
         } else {

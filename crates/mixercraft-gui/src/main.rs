@@ -121,6 +121,125 @@ fn update_tray(ui: &MainWindow) {
 fn show_window(ui: &MainWindow) {
     let _ = ui.show();
     ui.window().set_minimized(false);
+    schedule_placement(ui);
+}
+
+/// Restores the saved window size before the first show (the position is
+/// applied once the native window exists, see [`place_window`]).
+fn restore_geometry(ui: &MainWindow) {
+    if let Some(g) = gui_settings().window {
+        ui.window().set_size(slint::PhysicalSize::new(g.width.max(400), g.height.max(300)));
+    }
+}
+
+/// The native window is created once the event loop runs, so placement
+/// happens shortly after a show.
+fn schedule_placement(ui: &MainWindow) {
+    let w = ui.as_weak();
+    slint::Timer::single_shot(Duration::from_millis(50), move || {
+        if let Some(ui) = w.upgrade() {
+            place_window(&ui);
+        }
+    });
+}
+
+/// On the first show: moves the window to its saved position, brings it
+/// back onto a screen if that position is off every monitor (e.g. a
+/// disconnected second screen), and maximises it if it was.
+fn place_window(ui: &MainWindow) {
+    use slint::winit_030::WinitWindowAccessor;
+    use slint::winit_030::winit::dpi::{PhysicalPosition, PhysicalSize};
+    thread_local! {
+        static PLACED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if PLACED.with(std::cell::Cell::get) {
+        return;
+    }
+    let saved = gui_settings().window;
+    let done = ui.window().with_winit_window(|w| {
+        if let Some(g) = saved {
+            w.set_outer_position(PhysicalPosition::new(g.x, g.y));
+        }
+        let (pos, size) = (PhysicalPosition::new(saved.map_or(0, |g| g.x), saved.map_or(0, |g| g.y)), w.outer_size());
+        let pos = if saved.is_some() { pos } else { w.outer_position().unwrap_or_default() };
+        // At least the top-left 100 x 40 px (the title bar) must be on a monitor.
+        let reachable = w.available_monitors().any(|m| {
+            let (mp, ms) = (m.position(), m.size());
+            let overlap_x = (pos.x + size.width.min(100) as i32).min(mp.x + ms.width as i32) - pos.x.max(mp.x);
+            let overlap_y = (pos.y + 40).min(mp.y + ms.height as i32) - pos.y.max(mp.y);
+            overlap_x >= 50 && overlap_y >= 20
+        });
+        if !reachable && let Some(m) = w.primary_monitor().or_else(|| w.current_monitor()) {
+            let (mp, ms) = (m.position(), m.size());
+            let (width, height) = (size.width.min(ms.width), size.height.min(ms.height));
+            let _ = w.request_inner_size(PhysicalSize::new(width, height));
+            w.set_outer_position(PhysicalPosition::new(
+                mp.x + (ms.width.saturating_sub(width) / 2) as i32,
+                mp.y + (ms.height.saturating_sub(height) / 2) as i32,
+            ));
+        }
+    });
+    if done.is_none() {
+        // No native window yet: try again shortly.
+        schedule_placement(ui);
+        return;
+    }
+    PLACED.with(|p| p.set(true));
+    if saved.is_some_and(|g| g.maximized) {
+        ui.window().set_maximized(true);
+        ui.set_max_state(true);
+    }
+}
+
+/// Notes the window's current geometry (normal size and position, and
+/// whether it is maximised) while it is visible and not minimised.
+fn track_geometry(ui: &MainWindow) {
+    let w = ui.window();
+    if !w.is_visible() || w.is_minimized() {
+        return;
+    }
+    let maximized = w.is_maximized();
+    let (p, s) = (w.position(), w.size());
+    GUI_SETTINGS.with(|g| {
+        let mut g = g.borrow_mut();
+        let mut geo = g.1.window.unwrap_or(settings::WindowGeometry {
+            x: p.x,
+            y: p.y,
+            width: s.width,
+            height: s.height,
+            maximized,
+        });
+        geo.maximized = maximized;
+        if !maximized {
+            (geo.x, geo.y, geo.width, geo.height) = (p.x, p.y, s.width, s.height);
+        }
+        g.1.window = Some(geo);
+    });
+}
+
+/// Writes the window geometry (with the other app preferences) if it
+/// changed since the last save.
+fn save_geometry() {
+    thread_local! {
+        static SAVED: std::cell::Cell<Option<settings::WindowGeometry>> = const { std::cell::Cell::new(None) };
+    }
+    let (path, gs) = GUI_SETTINGS.with(|g| g.borrow().clone());
+    if gs.window.is_none() || SAVED.with(|s| s.get()) == gs.window {
+        return;
+    }
+    if let Some(path) = path
+        && settings::save(&path, &gs).is_ok()
+    {
+        SAVED.with(|s| s.set(gs.window));
+    }
+}
+
+/// Quitting the app stops the audio engine too (hiding to the tray does
+/// not).
+fn stop_engine_on_quit() {
+    if let Ok(mut client) = mixercraft_ipc::Client::connect("mixercraft-gui") {
+        let _ = client.request(&mixercraft_ipc::Request::Shutdown);
+    }
 }
 
 fn mark_edit(bus: bool, i: usize) {
@@ -1007,7 +1126,12 @@ fn main() -> Result<(), slint::PlatformError> {
     #[cfg(not(any(windows, target_os = "macos")))]
     drop(tx);
 
-    ui.window().on_close_requested(|| {
+    let w = ui.as_weak();
+    ui.window().on_close_requested(move || {
+        if let Some(ui) = w.upgrade() {
+            track_geometry(&ui);
+            save_geometry();
+        }
         if !hides_to_tray() {
             let _ = slint::quit_event_loop();
         }
@@ -1015,6 +1139,10 @@ fn main() -> Result<(), slint::PlatformError> {
     });
     let w = ui.as_weak();
     ui.on_close_window(move || {
+        if let Some(ui) = w.upgrade() {
+            track_geometry(&ui);
+            save_geometry();
+        }
         if hides_to_tray() {
             if let Some(ui) = w.upgrade() {
                 let _ = ui.hide();
@@ -1024,10 +1152,18 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
+    restore_geometry(&ui);
     if !(start_hidden && cfg!(any(windows, target_os = "macos"))) {
         ui.show()?;
+        schedule_placement(&ui);
     }
-    slint::run_event_loop_until_quit()
+    let result = slint::run_event_loop_until_quit();
+    // Quitting (tray menu, close button set to quit, installer): keep the
+    // window's place and stop the engine; app and audio go together.
+    track_geometry(&ui);
+    save_geometry();
+    stop_engine_on_quit();
+    result
 }
 
 /// Starts the update thread and connects the About page to it.
@@ -1155,6 +1291,7 @@ fn install_window_actions(ui: &MainWindow) {
             if ui.get_max_state() != maximized {
                 ui.set_max_state(maximized);
             }
+            track_geometry(&ui);
         }
     });
     std::mem::forget(timer);

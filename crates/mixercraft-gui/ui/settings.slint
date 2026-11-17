@@ -212,7 +212,7 @@ export component SettingsView inherits ScrollView {
                     title: "WINDOW";
                     if root.state.has-tray: Row {
                         title: "Close button";
-                        detail: "Audio keeps running either way; the engine is a separate program.";
+                        detail: "Hiding keeps audio running; quitting stops the app and its audio engine.";
                         Segmented {
                             options: ["Hide to tray", "Quit the app"];
                             selected: root.state.close-to-tray ? 0 : 1;
