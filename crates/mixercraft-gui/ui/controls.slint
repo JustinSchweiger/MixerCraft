@@ -248,11 +248,18 @@ export component DeviceSelect inherits Rectangle {
             vertical-alignment: center;
             horizontal-stretch: 1;
         }
-        Text {
-            text: "▾";
-            font-size: 11px;
-            color: Theme.text-dim;
-            vertical-alignment: center;
+        // Drawn: the bundled font has no arrow glyph.
+        VerticalLayout {
+            alignment: center;
+            Path {
+                width: 8px;
+                height: 5px;
+                viewbox-width: 8;
+                viewbox-height: 5;
+                commands: "M 0.5 0.5 L 4 4 L 7.5 0.5";
+                stroke: Theme.text-dim;
+                stroke-width: 1.4px;
+            }
         }
     }
     touch := TouchArea {

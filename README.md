@@ -40,7 +40,7 @@ and keeps running cleanly for days.
 | ⏱️ **Clock drift handling** | Every device runs through a drift-compensated resampler, so independent hardware clocks never drain or overflow a buffer |
 | 🛟 **Automatic recovery** | Unplugged or failing devices are reopened; a watchdog and adaptive buffers catch stalls, and every event is logged |
 | ⚡ **Fast and separate** | The audio engine (`mixercraftd`) starts in about 0.2 s and runs without the window: closing or restarting the app never interrupts audio |
-| 🔈 **Keep-awake tone** | An inaudible tone stops speakers with auto-standby from switching off |
+| 🔈 **Keep awake** | A short, very quiet pulse every few minutes of silence stops speakers with auto-standby from switching off |
 | 🖥️ **Tray and sign-in** | Lives in the system tray, opens at sign-in if you want, one instance only |
 | 🔄 **Updates** | Checks for new versions and installs them when you click *Download and install* |
 | ⌨️ **Command line** | `mixercraft` controls every fader, route and device from a terminal or script |

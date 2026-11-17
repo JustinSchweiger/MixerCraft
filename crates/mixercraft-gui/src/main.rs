@@ -387,6 +387,9 @@ fn sync_rows(current: ModelRc<StripView>, fresh: Vec<StripView>, bus: bool) -> O
             row.high = old.high;
             row.denoise = old.denoise;
             row.keep_awake = old.keep_awake;
+            row.ka_pulse = old.ka_pulse;
+            row.ka_level = old.ka_level;
+            row.ka_interval = old.ka_interval;
             row.device = old.device.clone();
             row.name = old.name.clone();
         }
@@ -400,6 +403,7 @@ fn sync_rows(current: ModelRc<StripView>, fresh: Vec<StripView>, bus: bool) -> O
             || old.solo != row.solo
             || knobs_of(&old) != knobs_of(&row)
             || old.keep_awake != row.keep_awake
+            || (old.ka_pulse, old.ka_level, old.ka_interval) != (row.ka_pulse, row.ka_level, row.ka_interval)
             || !same_routes;
         if changed {
             model.set_row_data(i, row);
@@ -449,6 +453,9 @@ fn apply_status(ui: &MainWindow, s: &EngineStatus) {
         .map(|b| StripView {
             master: b.master,
             keep_awake: b.keep_awake.enabled,
+            ka_pulse: b.keep_awake.mode == mixercraft_ipc::KeepAwakeMode::Pulse,
+            ka_level: b.keep_awake.level_db,
+            ka_interval: b.keep_awake.interval_s,
             ..strip_view(&b.name, &choice_text(&b.sink_choice, false), b.gain_db, b.mute, false, Vec::new())
         })
         .collect();
@@ -837,6 +844,26 @@ fn show_notice(ui: &MainWindow, text: String) {
 }
 
 /// Updates one strip row in place for immediate visual feedback.
+/// Sends a bus's keep-awake settings from its row. The infrasound frequency
+/// is not edited here, so it comes from the engine's last status.
+fn send_keep_awake(tx: &mpsc::Sender<Cmd>, i: usize, row: &StripView) {
+    mark_edit(true, i);
+    let keep_awake = BUS_KEEP_AWAKE.with(|k| {
+        let mut k = k.borrow_mut();
+        let mut ka = k.get(i).copied().unwrap_or_default();
+        ka.enabled = row.keep_awake;
+        ka.mode =
+            if row.ka_pulse { mixercraft_ipc::KeepAwakeMode::Pulse } else { mixercraft_ipc::KeepAwakeMode::Infrasound };
+        ka.level_db = row.ka_level;
+        ka.interval_s = row.ka_interval;
+        if let Some(slot) = k.get_mut(i) {
+            *slot = ka;
+        }
+        ka
+    });
+    let _ = tx.send(Cmd::BusKeepAwake(i as u16, keep_awake));
+}
+
 fn edit_row(model: &ModelRc<StripView>, i: usize, f: impl FnOnce(&mut StripView)) -> Option<StripView> {
     let m = vec_model(model)?;
     let mut row = m.row_data(i)?;
@@ -1012,19 +1039,25 @@ fn main() -> Result<(), slint::PlatformError> {
     let t = tx.clone();
     ui.on_bus_keep_awake(move |i| {
         let ui = w.unwrap();
-        let mut enabled = false;
-        if edit_row(&ui.get_buses(), i as usize, |r| {
-            r.keep_awake = !r.keep_awake;
-            enabled = r.keep_awake;
-        })
-        .is_some()
-        {
-            mark_edit(true, i as usize);
-            // Keep a level or frequency set elsewhere (CLI, config file).
-            let mut keep_awake = BUS_KEEP_AWAKE.with(|k| k.borrow().get(i as usize).copied()).unwrap_or_default();
-            keep_awake.enabled = enabled;
-            let _ = t.send(Cmd::BusKeepAwake(i as u16, keep_awake));
+        if let Some(row) = edit_row(&ui.get_buses(), i as usize, |r| r.keep_awake = !r.keep_awake) {
+            send_keep_awake(&t, i as usize, &row);
         }
+    });
+    let w = ui.as_weak();
+    let t = tx.clone();
+    ui.on_bus_keep_awake_settings(move |i, pulse, level, interval| {
+        let ui = w.unwrap();
+        if let Some(row) = edit_row(&ui.get_buses(), i as usize, |r| {
+            r.ka_pulse = pulse;
+            r.ka_level = level.clamp(-70.0, -20.0);
+            r.ka_interval = interval.clamp(30.0, 900.0);
+        }) {
+            send_keep_awake(&t, i as usize, &row);
+        }
+    });
+    let t = tx.clone();
+    ui.on_bus_keep_awake_test(move |i| {
+        let _ = t.send(Cmd::BusKeepAwakeTest(i as u16));
     });
     let w = ui.as_weak();
     let t = tx.clone();

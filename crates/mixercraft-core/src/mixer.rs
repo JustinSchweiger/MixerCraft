@@ -123,8 +123,10 @@ pub enum MixerCommand {
     Route { strip: u16, bus: u16, enabled: bool },
     /// Sets a strip's noise suppression, gate, EQ and compressor.
     StripFx { strip: u16, params: FxParams },
-    /// Sets a bus's keep-awake tone.
+    /// Sets a bus's keep-awake signal.
     BusKeepAwake { bus: u16, params: KeepAwakeParams },
+    /// Plays a bus's keep-awake signal once now.
+    BusKeepAwakeTest { bus: u16 },
     /// Sets a bus fader (dB).
     BusGain { bus: u16, db: f32 },
     /// Mutes or unmutes a bus.
@@ -367,6 +369,9 @@ impl Mixer {
             }
             MixerCommand::BusKeepAwake { bus, params } => {
                 self.bus_mut(bus)?.keep_awake.set_params(params);
+            }
+            MixerCommand::BusKeepAwakeTest { bus } => {
+                self.bus_mut(bus)?.keep_awake.trigger_test();
             }
             MixerCommand::BusGain { bus, db } => {
                 if db.is_nan() {

@@ -6,7 +6,26 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- "Keep awake" did not keep some speakers on: their standby detection ignores
+  the inaudible 15 Hz tone. Keep-awake now plays a short (0.3 s), very quiet
+  burst of soft noise (150 Hz to 2.5 kHz, -45 dBFS peak by default) after
+  every 4 minutes of silence ("Pulse" mode, the default for new outputs).
+  The "⋯" button next to "Keep awake" opens its settings: Pulse or
+  Infrasound, level (-70 to -20 dBFS), pulse interval (30 s to 15 min) and a
+  Test button that plays one pulse right away. Outputs that already used
+  keep-awake keep the infrasound tone until you switch them to Pulse.
+- The arrow on device pickers was missing (the bundled font has no such
+  glyph); it is drawn now.
+
 ### Changed
+- Configuration schema 4: per-output `keep_awake.mode` (`"pulse"` or
+  `"infrasound"`) and `keep_awake.interval_s`. Schema 3 files are migrated;
+  existing keep-awake settings become `mode = "infrasound"`.
+- `mixercraft keep-awake <bus> on` takes `--mode pulse|infrasound` and
+  `--interval <s>`; `mixercraft keep-awake-test <bus>` plays one pulse. IPC
+  protocol v1 gains `test_bus_keep_awake` and the `mode` and `interval_s`
+  fields (additive).
 - Quitting the desktop app (tray "Quit MixerCraft", the close button when it
   is set to quit, or an update) now also stops the audio engine: app and
   audio start and stop together. Hiding the window to the tray keeps audio

@@ -15,8 +15,12 @@ export struct StripView {
     denoise: bool,
     // Buses only: this bus clocks the engine and cannot be removed.
     master: bool,
-    // Buses only: keep-awake tone on.
+    // Buses only: keep-awake on; pulses (else infrasound); level (dBFS peak)
+    // and seconds of silence between pulses.
     keep-awake: bool,
+    ka-pulse: bool,
+    ka-level: float,
+    ka-interval: float,
     routes: [bool],
     // Processing knob positions, 0..1 (see src/fx_law.rs).
     gate: float,
@@ -353,6 +357,9 @@ export component BusStrip inherits StripFrame {
     callback gain(float);
     callback mute();
     callback keep-awake();
+    // Mode (true: pulse), level (dBFS), pulse interval (s).
+    callback keep-awake-settings(bool, float, float);
+    callback keep-awake-test();
     width: 140px;
     kind: "output";
     removable: !root.data.master;
@@ -375,12 +382,125 @@ export component BusStrip inherits StripFrame {
     }
     HorizontalLayout {
         vertical-stretch: 0;
+        spacing: 4px;
         IndicatorButton {
             text: "Keep awake";
             horizontal-stretch: 1;
-            a11y-label: root.data.name + " keep speakers awake (inaudible tone after 10 s of silence)";
+            a11y-label: root.data.name + " keep speakers awake";
             on: root.data.keep-awake;
             clicked => { root.keep-awake(); }
+        }
+        ka-more := Rectangle {
+            width: 26px;
+            height: 26px;
+            border-radius: 7px;
+            border-width: 1px;
+            border-color: ka-touch.has-hover ? Theme.text-dim : Theme.button-border;
+            background: ka-touch.has-hover ? Theme.button-hover : Theme.button;
+            accessible-role: button;
+            accessible-label: root.data.name + " keep-awake settings";
+            accessible-action-default => { ka-popup.show(); }
+            // "More" dots, drawn (the bundled font has no such glyphs).
+            HorizontalLayout {
+                alignment: center;
+                spacing: 2px;
+                for _ in 3: VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 3px;
+                        height: 3px;
+                        border-radius: 1.5px;
+                        background: ka-touch.has-hover ? Theme.text : Theme.text-mid;
+                    }
+                }
+            }
+            ka-touch := TouchArea {
+                clicked => { ka-popup.show(); }
+            }
+            ka-popup := PopupWindow {
+                x: ka-more.width - self.width;
+                y: -self.height - 6px;
+                width: 250px;
+                height: 236px;
+                close-policy: close-on-click-outside;
+                Rectangle {
+                    background: Theme.popup;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: Theme.strip-border;
+                    drop-shadow-blur: 12px;
+                    drop-shadow-color: #00000080;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 8px;
+                        Text { text: "Keep speakers awake"; font-size: Theme.font-small; color: Theme.text-dim; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            IndicatorButton {
+                                text: "Pulse";
+                                horizontal-stretch: 1;
+                                a11y-label: root.data.name + " keep-awake pulses";
+                                on: root.data.ka-pulse;
+                                clicked => { root.keep-awake-settings(true, root.data.ka-level, root.data.ka-interval); }
+                            }
+                            IndicatorButton {
+                                text: "Infrasound";
+                                horizontal-stretch: 1;
+                                a11y-label: root.data.name + " keep-awake infrasound";
+                                on: !root.data.ka-pulse;
+                                clicked => { root.keep-awake-settings(false, root.data.ka-level, root.data.ka-interval); }
+                            }
+                        }
+                        Text {
+                            text: root.data.ka-pulse
+                                ? "A short, very quiet hiss after each silent interval."
+                                : "An inaudible low tone after 10 s of silence. Many speakers ignore it.";
+                            wrap: word-wrap;
+                            font-size: Theme.font-small;
+                            color: Theme.text-mid;
+                        }
+                        HorizontalLayout {
+                            alignment: space-around;
+                            Knob {
+                                label: "Level";
+                                value: (root.data.ka-level + 70) / 50;
+                                default-value: 0.5;
+                                active: true;
+                                value-text: round(root.data.ka-level) + " dB";
+                                a11y-label: root.data.name + " keep-awake level";
+                                a11y-value: root.data.ka-level;
+                                a11y-min: -70;
+                                a11y-max: -20;
+                                changed(v) => { root.keep-awake-settings(root.data.ka-pulse, round(-70 + 50 * v), root.data.ka-interval); }
+                            }
+                            if root.data.ka-pulse: Knob {
+                                label: "Every";
+                                value: (root.data.ka-interval - 30) / 870;
+                                default-value: 210 / 870;
+                                active: true;
+                                value-text: root.data.ka-interval < 60
+                                    ? round(root.data.ka-interval) + " s"
+                                    : (round(root.data.ka-interval / 30) / 2) + " min";
+                                a11y-label: root.data.name + " keep-awake pulse interval in seconds";
+                                a11y-value: root.data.ka-interval;
+                                a11y-min: 30;
+                                a11y-max: 900;
+                                changed(v) => { root.keep-awake-settings(true, root.data.ka-level, 30 + round(v * 29) * 30); }
+                            }
+                        }
+                        HorizontalLayout {
+                            Rectangle { horizontal-stretch: 1; }
+                            IndicatorButton {
+                                text: "Test";
+                                width: 90px;
+                                on: true;
+                                a11y-label: root.data.name + " play a keep-awake test now";
+                                clicked => { root.keep-awake-test(); }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     HorizontalLayout {
@@ -438,6 +558,8 @@ export component MixerView inherits HorizontalLayout {
     callback strip-fx(int, int, float);
     callback strip-denoise(int);
     callback bus-keep-awake(int);
+    callback bus-keep-awake-settings(int, bool, float, float);
+    callback bus-keep-awake-test(int);
     in property <bool> denoise-available: true;
     callback strip-device(int, int);
     callback strip-rename(int, string);
@@ -483,6 +605,8 @@ export component MixerView inherits HorizontalLayout {
             gain(p) => { root.bus-gain(i, p); }
             mute => { root.bus-mute(i); }
             keep-awake => { root.bus-keep-awake(i); }
+            keep-awake-settings(p, l, s) => { root.bus-keep-awake-settings(i, p, l, s); }
+            keep-awake-test => { root.bus-keep-awake-test(i); }
             device-selected(d) => { root.bus-device(i, d); }
             rename(n) => { root.bus-rename(i, n); }
             remove => { root.bus-remove(i); }

@@ -7,7 +7,7 @@ use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use mixercraft_core::engine::{Command, engine};
 use mixercraft_core::fifo::{FifoSpec, fifo};
 use mixercraft_core::fx::FxParams;
-use mixercraft_core::keepawake::KeepAwakeParams;
+use mixercraft_core::keepawake::{KeepAwakeMode, KeepAwakeParams};
 use mixercraft_core::mixer::{BusSpec, Mixer, MixerCommand, MixerLayout, StripSpec};
 
 #[global_allocator]
@@ -73,8 +73,11 @@ fn engine_cycle_with_fifos_and_commands_does_not_allocate() {
                 ..FxParams::default()
             };
             handle.send(Command::Mixer(MixerCommand::StripFx { strip: 1, params })).unwrap();
-            let keep_awake = KeepAwakeParams { enabled: i % 200 != 0, level_db: -40.0, frequency_hz: 12.0 };
+            let mode = if i % 400 < 200 { KeepAwakeMode::Pulse } else { KeepAwakeMode::Infrasound };
+            let keep_awake =
+                KeepAwakeParams { enabled: i % 200 != 0, mode, level_db: -40.0, frequency_hz: 12.0, interval_s: 30.0 };
             handle.send(Command::Mixer(MixerCommand::BusKeepAwake { bus: 1, params: keep_awake })).unwrap();
+            handle.send(Command::Mixer(MixerCommand::BusKeepAwakeTest { bus: 1 })).unwrap();
         }
         assert_no_alloc(|| {
             in_w.write(&input);

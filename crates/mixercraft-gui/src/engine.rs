@@ -37,6 +37,7 @@ pub enum Cmd {
     },
     StripFx(u16, mixercraft_ipc::StripFx),
     BusKeepAwake(u16, mixercraft_ipc::KeepAwake),
+    BusKeepAwakeTest(u16),
     StripSource(u16, DeviceChoice),
     BusSink(u16, DeviceChoice),
     AddStrip,
@@ -82,6 +83,7 @@ pub fn coalesce(cmds: Vec<Cmd>) -> Vec<Cmd> {
             Cmd::BusGain(i, _) => seen.insert((true, *i)),
             // Knob drags send the whole processing state; the last one wins.
             Cmd::StripFx(i, _) => seen.insert((false, 1000 + *i)),
+            Cmd::BusKeepAwake(i, _) => seen.insert((true, 1000 + *i)),
             _ => true,
         })
         .collect();
@@ -99,6 +101,7 @@ fn request_for(cmd: &Cmd) -> Option<Request> {
         Cmd::Route { strip, bus, on } => Request::SetRoute { strip, bus, enabled: on },
         Cmd::StripFx(strip, fx) => Request::SetStripFx { strip, fx },
         Cmd::BusKeepAwake(bus, keep_awake) => Request::SetBusKeepAwake { bus, keep_awake },
+        Cmd::BusKeepAwakeTest(bus) => Request::TestBusKeepAwake { bus },
         Cmd::StripSource(strip, ref choice) => Request::SetStripSource { strip, choice: choice.clone() },
         Cmd::BusSink(bus, ref choice) => Request::SetBusSink { bus, choice: choice.clone() },
         Cmd::AddStrip => Request::AddStrip { name: String::new() },
