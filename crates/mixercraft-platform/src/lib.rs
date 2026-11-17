@@ -8,7 +8,7 @@
 //! Physical device I/O currently goes through [`cpal`], which wraps WASAPI
 //! (Windows), Core Audio (macOS) and ALSA or native PipeWire (Linux).
 //! Virtual devices (selector ids `virtual:<name>`) are emulated USB audio
-//! devices on Windows; see [`virtual_dev`].
+//! devices on Windows (see [`virtual_dev`]) and PipeWire nodes on Linux.
 //!
 //! Streams are not `Send` on every backend. The engine therefore creates,
 //! owns and drops all streams on a single supervisor thread; only the data
@@ -16,7 +16,16 @@
 
 pub mod autostart;
 pub mod capabilities;
+#[cfg(target_os = "linux")]
+mod pipewire_dev;
 pub mod virtual_dev;
+
+/// The virtual-device backend of this platform: PipeWire nodes on Linux,
+/// emulated USB devices (usbip-win2) elsewhere (only usable on Windows).
+#[cfg(target_os = "linux")]
+use pipewire_dev::Virtual as VirtualSystem;
+#[cfg(not(target_os = "linux"))]
+use virtual_dev::Virtual as VirtualSystem;
 
 use std::sync::OnceLock;
 
@@ -168,9 +177,10 @@ pub struct OpenStream {
 
 enum StreamInner {
     Cpal(cpal::Stream),
-    /// Held for its `Drop`, which unplugs the device.
+    /// Held for its `Drop`, which unplugs (Windows) or removes (Linux) the
+    /// device.
     Virtual {
-        _device: mixercraft_usbip::DeviceHandle,
+        _device: Box<dyn std::any::Any>,
     },
 }
 
@@ -197,7 +207,7 @@ impl OpenStream {
 pub struct AudioSystem {
     host: cpal::Host,
     /// Started on first use of a virtual device.
-    virtual_devices: OnceLock<virtual_dev::Virtual>,
+    virtual_devices: OnceLock<VirtualSystem>,
     /// Why starting virtual devices failed last time (retried on next use).
     virtual_error: std::sync::Mutex<Option<String>>,
     /// Where the default-device roles of virtual devices are remembered.
@@ -257,13 +267,13 @@ impl AudioSystem {
 
     /// Starts virtual devices on first use. A failure (e.g. the USB/IP port
     /// is taken) is retried on the next use instead of being remembered.
-    fn virtual_system(&self, name: &str) -> Result<&virtual_dev::Virtual, PlatformError> {
+    fn virtual_system(&self, name: &str) -> Result<&VirtualSystem, PlatformError> {
         if let Some(v) = self.virtual_devices.get() {
             return Ok(v);
         }
         let mut error = self.virtual_error.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let memory = self.virtual_memory_file.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-        match virtual_dev::Virtual::start(memory) {
+        match VirtualSystem::start(memory) {
             Ok(v) => {
                 *error = None;
                 Ok(self.virtual_devices.get_or_init(|| v))
@@ -369,7 +379,7 @@ impl AudioSystem {
     pub fn probe_input(&self, sel: &DeviceSelector, req: StreamRequest) -> Result<StreamInfo, PlatformError> {
         if let Some(name) = virtual_dev::virtual_name(sel) {
             self.virtual_system(name)?;
-            return Ok(virtual_dev::Virtual::info(name));
+            return Ok(VirtualSystem::info(name));
         }
         let (device, config, format) = self.prepare_input(sel, req)?;
         Ok(stream_info(&device, &config, format))
@@ -395,8 +405,8 @@ impl AudioSystem {
         if let Some(name) = virtual_dev::virtual_name(sel) {
             let handle = self.virtual_system(name)?.open_speaker(name, on_data, on_error);
             return Ok(OpenStream {
-                stream: StreamInner::Virtual { _device: handle },
-                info: virtual_dev::Virtual::info(name),
+                stream: StreamInner::Virtual { _device: virtual_handle(name, handle)? },
+                info: VirtualSystem::info(name),
             });
         }
         let (device, config, format) = self.prepare_input(sel, req)?;
@@ -445,7 +455,7 @@ impl AudioSystem {
     pub fn probe_output(&self, sel: &DeviceSelector, req: StreamRequest) -> Result<StreamInfo, PlatformError> {
         if let Some(name) = virtual_dev::virtual_name(sel) {
             self.virtual_system(name)?;
-            return Ok(virtual_dev::Virtual::info(name));
+            return Ok(VirtualSystem::info(name));
         }
         let (device, config, format) = self.prepare_output(sel, req)?;
         Ok(stream_info(&device, &config, format))
@@ -471,8 +481,8 @@ impl AudioSystem {
         if let Some(name) = virtual_dev::virtual_name(sel) {
             let handle = self.virtual_system(name)?.open_microphone(name, on_data, on_error);
             return Ok(OpenStream {
-                stream: StreamInner::Virtual { _device: handle },
-                info: virtual_dev::Virtual::info(name),
+                stream: StreamInner::Virtual { _device: virtual_handle(name, handle)? },
+                info: VirtualSystem::info(name),
             });
         }
         let (device, config, format) = self.prepare_output(sel, req)?;
@@ -506,6 +516,21 @@ impl Default for AudioSystem {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Boxes the handle of an opened virtual device (PipeWire can fail to
+/// create the node; a USB/IP device always opens and reports later).
+#[cfg(target_os = "linux")]
+fn virtual_handle(name: &str, handle: Result<pipewire_dev::Handle, String>) -> Result<Box<dyn std::any::Any>, PlatformError> {
+    match handle {
+        Ok(h) => Ok(Box::new(h)),
+        Err(why) => Err(virtual_dev::unavailable(name, &why)),
+    }
+}
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::unnecessary_wraps)] // same signature as on Linux
+fn virtual_handle(_name: &str, handle: mixercraft_usbip::DeviceHandle) -> Result<Box<dyn std::any::Any>, PlatformError> {
+    Ok(Box::new(handle))
 }
 
 fn device_name(d: &cpal::Device) -> String {

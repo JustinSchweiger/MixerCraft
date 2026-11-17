@@ -1,6 +1,9 @@
 //! Virtual devices: playback and recording endpoints that MixerCraft
 //! creates for other applications.
 //!
+//! On Linux they are PipeWire nodes (`crate::pipewire_dev`); everything
+//! below describes Windows.
+//!
 //! On Windows each one is an emulated USB audio device ([`mixercraft_usbip`])
 //! attached through the usbip-win2 client driver, which the user installs
 //! (see ADR 0007). A strip whose source is `virtual:<name>` creates a
@@ -52,11 +55,12 @@ pub fn virtual_name(sel: &DeviceSelector) -> Option<&str> {
 }
 
 /// Whether an endpoint name belongs to a MixerCraft virtual device (e.g.
-/// "Speakers (MixerCraft Game)"); such endpoints are hidden from the device
-/// list so nobody routes MixerCraft into itself.
+/// "Speakers (MixerCraft Game)" on Windows, "MixerCraft Game" as a PipeWire
+/// node); such endpoints are hidden from the device list so nobody routes
+/// MixerCraft into itself.
 #[must_use]
 pub fn is_virtual_endpoint_name(name: &str) -> bool {
-    name.contains(&format!("({PRODUCT_PREFIX}"))
+    name.contains(&format!("({PRODUCT_PREFIX}")) || name.starts_with(PRODUCT_PREFIX)
 }
 
 /// The usbip-win2 command-line client, if installed.
@@ -73,6 +77,9 @@ pub fn usbip_exe() -> Option<PathBuf> {
 /// Why virtual devices are unavailable, or `None` if they can be created.
 #[must_use]
 pub fn unavailable_reason() -> Option<&'static str> {
+    #[cfg(target_os = "linux")]
+    return crate::pipewire_dev::unavailable_reason();
+    #[cfg(not(target_os = "linux"))]
     if !cfg!(windows) {
         Some("virtual devices are not implemented on this platform yet")
     } else if usbip_exe().is_none() {
@@ -132,6 +139,7 @@ struct Job {
 }
 
 /// The USB/IP server and the worker that connects devices to Windows.
+#[cfg_attr(target_os = "linux", allow(dead_code))] // Linux uses PipeWire nodes
 pub(crate) struct Virtual {
     server: Server,
     jobs: Sender<Job>,
@@ -145,6 +153,7 @@ impl fmt::Debug for Virtual {
     }
 }
 
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 impl Virtual {
     pub(crate) fn start(memory_file: Option<PathBuf>) -> Result<Self, String> {
         if let Some(why) = unavailable_reason() {
