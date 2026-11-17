@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Windows: virtual devices could stop working after the PC went to sleep.
+  Windows dropped them while preparing to sleep, the engine reconnected them
+  half a second later, and Windows kept the old copies for good: every
+  application then got "device invalidated" (no sound into or out of
+  MixerCraft) until Windows was restarted, while MixerCraft still showed the
+  devices as running. The engine now connects nothing while the system goes
+  to sleep (and for 3 s after waking), waits until Windows has removed a
+  device's old copy before connecting it again, and checks that Windows
+  really detected the device anew. If Windows keeps an old copy, the device
+  is reported as failed with a message that says to restart Windows if it
+  does not come back by itself.
+
 ## [0.2.0] - 2026-11-17
 
 ### Added

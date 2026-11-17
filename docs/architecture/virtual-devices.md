@@ -60,6 +60,21 @@ Chosen because it costs nothing and needs no kernel code of our own
   a Rust-owned buffer corrupted the heap (found on hardware, fixed).
 * The devices exist only while the engine runs; configuration (strips,
   buses, ids, routing) persists in `config.toml` as usual.
+* Sleep and reconnects: Windows must remove a device's old copy before it
+  can detect the device again. On the owner's PC, Windows dropped all
+  virtual devices when it began to sleep, the engine reconnected them 0.5 s
+  later, and the old copies never went away: the endpoints stayed "present"
+  with their arrival time from the day before, every `IAudioClient::
+  Initialize` failed with `AUDCLNT_E_DEVICE_INVALIDATED`, and neither a
+  `usbip detach` nor an engine restart helped (a Windows restart does). The
+  attach worker therefore (1) connects nothing between the suspend
+  notification and 3 s after resuming (`PowerRegisterSuspendResumeNotification`),
+  (2) waits until Windows no longer has the device's serial number present
+  before attaching it, for up to 20 s, then reports the device as failed
+  ("restart Windows if it does not come back"), and (3) after the import
+  checks that the device's `LastArrivalDate` is newer than the attach
+  (Configuration Manager, `mixercraft-winaudio::device_state`), otherwise
+  reports it the same way.
 * The default-device guard only undoes a switch to an endpoint that did not
   exist before the attach; switches to known endpoints are the user's own
   default returning and are left alone.

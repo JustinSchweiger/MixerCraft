@@ -284,6 +284,12 @@ impl DeviceWatch {
         self.0.conn.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some()
     }
 
+    /// The device's USB serial number.
+    #[must_use]
+    pub fn serial(&self) -> &str {
+        &self.0.spec.serial
+    }
+
     /// Whether the device was removed (its handle dropped).
     #[must_use]
     pub fn removed(&self) -> bool {

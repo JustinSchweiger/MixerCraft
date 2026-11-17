@@ -1,6 +1,6 @@
 [package]
 name = "mixercraft-winaudio"
-description = "Windows audio endpoint helpers for MixerCraft (FFI): read and restore the default playback/recording devices."
+description = "Windows audio endpoint helpers for MixerCraft (FFI): read and restore the default playback/recording devices, device plug-and-play state, sleep notifications."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,11 +11,15 @@ publish = false
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_Properties",
     "Win32_Media_Audio",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
+    "Win32_System_Power",
     "Win32_System_Variant",
     "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",
 ] }
 windows-core = "0.62"

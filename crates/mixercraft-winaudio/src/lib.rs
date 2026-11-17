@@ -1,5 +1,7 @@
 //! Windows audio endpoints: read and restore the default devices, and name
-//! MixerCraft's virtual endpoints.
+//! MixerCraft's virtual endpoints. Also the plug-and-play state of devices
+//! and sleep notifications ([`device_state`], [`watch_power`]), which keep
+//! the virtual devices healthy across sleep.
 //!
 //! Windows makes a newly connected USB audio device the default playback
 //! and recording device. MixerCraft's virtual devices are such devices, so
@@ -25,13 +27,21 @@
 //!   frees it (a Rust-owned buffer there corrupted the heap, seen on
 //!   hardware). If some Windows version does not free it, a few bytes leak
 //!   per rename, which happens rarely.
+//! * Configuration Manager calls get NUL-terminated device ids and output
+//!   buffers whose stated size matches their real size.
+//! * The power-notification context is leaked, never freed, so the callback
+//!   can never see a dangling pointer, even while it is being unregistered.
+//!   The callback catches panics so none unwinds into Windows.
 //!
 //! On other platforms the functions return [`Error::Unsupported`].
 #![allow(unsafe_code)]
 
 use std::fmt;
 
-/// Errors from the Windows audio API.
+mod system;
+pub use system::{DeviceState, PowerEvent, PowerWatch, device_state, filetime_to_system_time, watch_power};
+
+/// Errors from the Windows APIs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// A COM call failed.
@@ -43,8 +53,8 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Com(m) => write!(f, "Windows audio API: {m}"),
-            Self::Unsupported => f.write_str("default audio endpoints are only managed on Windows"),
+            Self::Com(m) => write!(f, "Windows API: {m}"),
+            Self::Unsupported => f.write_str("only available on Windows"),
         }
     }
 }
