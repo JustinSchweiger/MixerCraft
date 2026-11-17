@@ -29,8 +29,13 @@ winresource.workspace = true
 [lints]
 workspace = true
 
-# The tray needs a GTK main loop on Linux; it is enabled on Windows and macOS
-# for now (see docs/feature-matrix.md).
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 tray-icon.workspace = true
+png.workspace = true
+
+# Linux tray: StatusNotifierItem over D-Bus (KDE, GNOME with the AppIndicator
+# extension, most other desktops), no GTK. async-io instead of tokio: zbus
+# already uses it for accessibility.
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3.7", default-features = false, features = ["async-io", "blocking"] }
 png.workspace = true

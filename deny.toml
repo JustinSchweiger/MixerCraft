@@ -33,6 +33,8 @@ allow = [
     # Slint (GUI toolkit), used under its royalty-free license, which
     # requires attribution ("Made with Slint" in the app). See ADR 0005.
     "LicenseRef-Slint-Royalty-free-2.0",
+    # Public-domain dedication (ksni, the Linux tray); no conditions.
+    "Unlicense",
 ]
 confidence-threshold = 0.9
 

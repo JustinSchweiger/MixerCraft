@@ -27,7 +27,9 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 4. Per-application capture on Windows (WASAPI process loopback) as an
    input source. Virtual devices: soak test, reboot/sleep behaviour, own
    USB product id.
-5. GUI: global hotkeys; Linux tray (KSNI); verify the sign-in toggles of the Settings tab at an actual sign-in.
+5. GUI: global hotkeys; verify the Linux tray on real desktops (KDE, GNOME
+   with AppIndicator); verify the sign-in toggles of the Settings tab at an
+   actual sign-in (Windows, Linux, macOS).
 6. Native WASAPI backend for low latency.
 7. macOS HAL plug-in; Windows driver once signing is arranged.
 8. Releases: sign feed manifests (minisign) and apply to SignPath for
@@ -61,6 +63,7 @@ they do **not** count as hardware verification.
 | Date | Environment | Result |
 |---|---|---|
 | 2026-11-17 | WSL2 Ubuntu 24.04 (x86_64), PipeWire 1.0.5 + WirePlumber, dummy driver only; WSLg | Linux packages: `.deb` installed with apt (`--version` of engine and CLI, launcher validated), removed; `.tar.gz` `install.sh` into a prefix and `--uninstall`. The packaged GUI panicked at start without `libxkbcommon-x11` (now a package dependency) and ran with it. PipeWire virtual devices: engine created `mixercraft.sink.game` (Audio/Sink) and `mixercraft.source.chat` (Audio/Source); idle for 8–12 s with no stall; a 1 kHz tone played with `pw-play` into the sink came out of the source (`pw-record`) at unity gain (RMS 5656 of 5657 expected, 997–999 zero crossings per second); `systemctl --user restart pipewire wireplumber` → both devices faulted ("connection error") and were reopened after 0.5 s, the tone passed again; engine stop removed both nodes. FIFO drift readings swung up to ±2000 ppm for ~15 s after the graph quantum changed (1024 → 2048 frames when a client joined) and settled to tens of ppm. |
+| 2026-11-17 | same, no desktop session (no StatusNotifier host); a stand-in StatusNotifierWatcher written in Python for the tray test | Linux tray: without a watcher the app logged "no tray icon" and kept the window (closing quits). With the stand-in watcher the item registered (title, icon name, tooltip with the live engine status); the D-Bus menu listed Open mixer / Mute Game / Stop engine / Quit; clicking "Mute Game" muted the strip in the engine and checked the item; Activate opened the window; Quit closed the app and stopped the engine. App sign-in start: `mixercraft autostart enable --app` wrote `~/.config/autostart/mixercraft.desktop` (passes `desktop-file-validate`), `status` reported it, `disable --app` removed it. Not tested: a real panel (KDE, GNOME AppIndicator) and an actual sign-in. |
 
 ## Known limitations found in testing
 
