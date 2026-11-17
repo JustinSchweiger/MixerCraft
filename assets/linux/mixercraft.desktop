@@ -9,3 +9,4 @@ Icon=mixercraft
 Terminal=false
 Categories=AudioVideo;Audio;Mixer;
 Keywords=mixer;audio;routing;virtual;microphone;
+StartupWMClass=mixercraft

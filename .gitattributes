@@ -1,0 +1,5 @@
+# Shell scripts and Linux/macOS packaging files must keep LF line endings
+# (Windows checkouts with core.autocrlf would otherwise break them).
+*.sh text eol=lf
+*.desktop text eol=lf
+*.plist text eol=lf
