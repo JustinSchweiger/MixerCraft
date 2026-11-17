@@ -13,6 +13,14 @@ All notable changes to this project are documented here. The format follows
   running as before.
 
 ### Added
+- Linux tray icon (StatusNotifierItem via `ksni`, no GTK): the same menu as on
+  Windows and macOS (open, mute per input, start/stop engine, quit), close to
+  tray and `--tray`. Desktops without a tray host (plain GNOME) keep the
+  previous behaviour (closing quits). `deny.toml` now allows the Unlicense
+  (ksni's public-domain dedication).
+- "Open MixerCraft when you sign in" on the Settings tab (and `mixercraft
+  autostart enable --app`) now works on Linux (XDG autostart entry) and macOS
+  (a second LaunchAgent, `org.mixercraft.app`, used from the next sign-in).
 - The window remembers its position, size and maximised state (saved in
   `gui.toml` when it is hidden or the app quits) and reopens there; a
   position that is no longer on any screen (e.g. an unplugged monitor) is
@@ -36,6 +44,14 @@ First release: Windows installer on
 [GitHub Releases](https://github.com/JustinSchweiger/MixerCraft/releases/tag/v0.1.0).
 
 ### Added
+- Linux tray icon (StatusNotifierItem via `ksni`, no GTK): the same menu as on
+  Windows and macOS (open, mute per input, start/stop engine, quit), close to
+  tray and `--tray`. Desktops without a tray host (plain GNOME) keep the
+  previous behaviour (closing quits). `deny.toml` now allows the Unlicense
+  (ksni's public-domain dedication).
+- "Open MixerCraft when you sign in" on the Settings tab (and `mixercraft
+  autostart enable --app`) now works on Linux (XDG autostart entry) and macOS
+  (a second LaunchAgent, `org.mixercraft.app`, used from the next sign-in).
 - Settings tab in the desktop app:
   - Startup (Windows): open MixerCraft hidden in the tray when you sign in
     (a second Task Scheduler task, "MixerCraft", running the app with
@@ -120,6 +136,14 @@ First release: Windows installer on
   longer causes a seconds-long pitch correction.
 
 ### Added
+- Linux tray icon (StatusNotifierItem via `ksni`, no GTK): the same menu as on
+  Windows and macOS (open, mute per input, start/stop engine, quit), close to
+  tray and `--tray`. Desktops without a tray host (plain GNOME) keep the
+  previous behaviour (closing quits). `deny.toml` now allows the Unlicense
+  (ksni's public-domain dedication).
+- "Open MixerCraft when you sign in" on the Settings tab (and `mixercraft
+  autostart enable --app`) now works on Linux (XDG autostart entry) and macOS
+  (a second LaunchAgent, `org.mixercraft.app`, used from the next sign-in).
 - The MixerCraft icon on the Windows executables (`mixercraft-gui.exe`,
   `mixercraftd.exe`, `mixercraft.exe`) for Explorer, the taskbar, Alt-Tab
   and Task Manager, plus version information (product "MixerCraft",

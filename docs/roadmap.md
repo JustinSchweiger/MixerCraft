@@ -27,7 +27,9 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 4. Per-application capture on Windows (WASAPI process loopback) as an
    input source. Virtual devices: soak test, reboot/sleep behaviour, own
    USB product id.
-5. GUI: global hotkeys; Linux tray (KSNI); verify the sign-in toggles of the Settings tab at an actual sign-in.
+5. GUI: global hotkeys; verify the Linux tray on real desktops (KDE, GNOME
+   with AppIndicator); verify the sign-in toggles of the Settings tab at an
+   actual sign-in (Windows, Linux, macOS).
 6. Native WASAPI backend for low latency.
 7. macOS HAL plug-in; Windows driver once signing is arranged.
 8. Releases: sign feed manifests (minisign) and apply to SignPath for
