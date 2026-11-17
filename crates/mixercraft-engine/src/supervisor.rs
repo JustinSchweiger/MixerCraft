@@ -33,7 +33,7 @@ use mixercraft_config::{BusConfig, Config, DeviceRef, FxConfig, Sink, Source, St
 use mixercraft_core::engine::{Command, EngineHandle, engine};
 use mixercraft_core::fifo::{FifoSpec, fifo};
 use mixercraft_core::fx::FxParams;
-use mixercraft_core::keepawake::KeepAwakeParams;
+use mixercraft_core::keepawake::{KeepAwakeMode, KeepAwakeParams};
 use mixercraft_core::mixer::{BusSpec, Mixer, MixerCommand, MixerLayout, MixerMeters, StripSpec};
 use mixercraft_core::stats::FifoStats;
 use mixercraft_ipc::{
@@ -227,7 +227,55 @@ pub fn layout_from_config(config: &Config) -> MixerLayout {
 }
 
 fn keep_awake_params(k: &mixercraft_config::KeepAwakeConfig) -> KeepAwakeParams {
-    KeepAwakeParams { enabled: k.enabled, level_db: k.level_db, frequency_hz: k.frequency_hz }
+    KeepAwakeParams {
+        enabled: k.enabled,
+        mode: match k.mode {
+            mixercraft_config::KeepAwakeMode::Pulse => KeepAwakeMode::Pulse,
+            mixercraft_config::KeepAwakeMode::Infrasound => KeepAwakeMode::Infrasound,
+        },
+        level_db: k.level_db,
+        frequency_hz: k.frequency_hz,
+        interval_s: k.interval_s,
+    }
+}
+
+/// The configuration form of keep-awake settings from a client.
+fn keep_awake_config(k: &mixercraft_ipc::KeepAwake) -> mixercraft_config::KeepAwakeConfig {
+    let p = KeepAwakeParams {
+        enabled: k.enabled,
+        mode: match k.mode {
+            mixercraft_ipc::KeepAwakeMode::Pulse => KeepAwakeMode::Pulse,
+            mixercraft_ipc::KeepAwakeMode::Infrasound => KeepAwakeMode::Infrasound,
+        },
+        level_db: k.level_db,
+        frequency_hz: k.frequency_hz,
+        interval_s: k.interval_s,
+    }
+    .sanitized();
+    mixercraft_config::KeepAwakeConfig {
+        enabled: p.enabled,
+        mode: match p.mode {
+            KeepAwakeMode::Pulse => mixercraft_config::KeepAwakeMode::Pulse,
+            KeepAwakeMode::Infrasound => mixercraft_config::KeepAwakeMode::Infrasound,
+        },
+        level_db: p.level_db,
+        frequency_hz: p.frequency_hz,
+        interval_s: p.interval_s,
+    }
+}
+
+/// The client form of configured keep-awake settings.
+fn keep_awake_status(k: &mixercraft_config::KeepAwakeConfig) -> mixercraft_ipc::KeepAwake {
+    mixercraft_ipc::KeepAwake {
+        enabled: k.enabled,
+        mode: match k.mode {
+            mixercraft_config::KeepAwakeMode::Pulse => mixercraft_ipc::KeepAwakeMode::Pulse,
+            mixercraft_config::KeepAwakeMode::Infrasound => mixercraft_ipc::KeepAwakeMode::Infrasound,
+        },
+        level_db: k.level_db,
+        frequency_hz: k.frequency_hz,
+        interval_s: k.interval_s,
+    }
 }
 
 fn fx_params(fx: &mixercraft_config::FxConfig) -> FxParams {
@@ -1044,6 +1092,16 @@ impl Supervisor {
             Request::RemoveBus { bus } => return self.remove_bus(usize::from(bus)),
             Request::RenameStrip { strip, name } => return self.rename(false, usize::from(strip), &name),
             Request::RenameBus { bus, name } => return self.rename(true, usize::from(bus), &name),
+            Request::TestBusKeepAwake { bus } => {
+                if usize::from(bus) >= self.config.buses.len() {
+                    return invalid("no such bus");
+                }
+                // A test changes nothing worth saving.
+                return match self.handle.send(Command::Mixer(MixerCommand::BusKeepAwakeTest { bus })) {
+                    Ok(()) => Response::Ok,
+                    Err(_) => Response::Error { code: ErrorCode::Busy, message: "engine command queue full".into() },
+                };
+            }
             Request::Status => return Response::Status(Box::new(self.status())),
             Request::Meters => return Response::Meters(self.meter_snapshot()),
             Request::Devices => {
@@ -1133,18 +1191,8 @@ impl Supervisor {
             }
             Request::SetBusKeepAwake { bus, keep_awake } => {
                 let Some(b) = self.config.buses.get_mut(usize::from(bus)) else { return invalid("no such bus") };
-                let p = KeepAwakeParams {
-                    enabled: keep_awake.enabled,
-                    level_db: keep_awake.level_db,
-                    frequency_hz: keep_awake.frequency_hz,
-                }
-                .sanitized();
-                b.keep_awake = mixercraft_config::KeepAwakeConfig {
-                    enabled: p.enabled,
-                    level_db: p.level_db,
-                    frequency_hz: p.frequency_hz,
-                };
-                MixerCommand::BusKeepAwake { bus, params: p }
+                b.keep_awake = keep_awake_config(&keep_awake);
+                MixerCommand::BusKeepAwake { bus, params: keep_awake_params(&b.keep_awake) }
             }
         };
         match self.handle.send(Command::Mixer(cmd)) {
@@ -1275,11 +1323,7 @@ impl Supervisor {
                 .enumerate()
                 .map(|(i, b)| BusStatus {
                     master: self.config.master_bus_index() == Some(i),
-                    keep_awake: mixercraft_ipc::KeepAwake {
-                        enabled: b.keep_awake.enabled,
-                        level_db: b.keep_awake.level_db,
-                        frequency_hz: b.keep_awake.frequency_hz,
-                    },
+                    keep_awake: keep_awake_status(&b.keep_awake),
                     id: b.id.clone(),
                     name: b.name.clone(),
                     sink: sink_label(&b.sink),
@@ -1425,6 +1469,26 @@ mod tests {
         let bad = EngineSettings { sample_rate: 1, ..EngineSettings::default() };
         assert!(matches!(s.handle_request(Request::SetEngineSettings { settings: bad }), Response::Error { .. }));
         assert_eq!(s.config.engine.sample_rate, 48_000);
+    }
+
+    #[test]
+    fn keep_awake_settings_are_stored_and_testing_saves_nothing() {
+        let mut s = deviceless();
+        let keep_awake = mixercraft_ipc::KeepAwake {
+            enabled: true,
+            mode: mixercraft_ipc::KeepAwakeMode::Pulse,
+            level_db: -10.0, // clamped to -20
+            interval_s: 60.0,
+            ..Default::default()
+        };
+        ok(s.handle_request(Request::SetBusKeepAwake { bus: 0, keep_awake }));
+        let k = s.config.buses[0].keep_awake;
+        assert_eq!((k.mode, k.level_db, k.interval_s), (mixercraft_config::KeepAwakeMode::Pulse, -20.0, 60.0));
+        assert_eq!(s.status().buses[0].keep_awake.interval_s, 60.0);
+        s.dirty_since = None;
+        ok(s.handle_request(Request::TestBusKeepAwake { bus: 0 }));
+        assert!(s.dirty_since.is_none(), "a test is not a change");
+        assert!(matches!(s.handle_request(Request::TestBusKeepAwake { bus: 9 }), Response::Error { .. }));
     }
 
     #[test]

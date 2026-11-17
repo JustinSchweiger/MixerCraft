@@ -67,18 +67,29 @@ enum Cmd {
         #[arg(long)]
         denoise: Option<OnOff>,
     },
-    /// Keep speakers with auto-standby awake: after 10 s of silence a bus
-    /// plays an inaudible infrasonic tone (default 15 Hz at -45 dBFS).
+    /// Keep speakers with auto-standby awake. Pulse mode (default) plays a
+    /// short quiet noise burst after each interval of silence; infrasound
+    /// mode plays a continuous inaudible low tone after 10 s of silence
+    /// (many speakers ignore it).
     KeepAwake {
         bus: u16,
         state: OnOff,
-        /// Tone level in dBFS (-70 to -20).
+        /// Pulse or infrasound.
+        #[arg(long)]
+        mode: Option<KaMode>,
+        /// Signal level in dBFS peak (-70 to -20).
         #[arg(long, allow_negative_numbers = true)]
         level: Option<f32>,
-        /// Tone frequency in Hz (5 to 40).
+        /// Seconds of silence between pulses (30 to 900).
+        #[arg(long)]
+        interval: Option<f32>,
+        /// Infrasound frequency in Hz (5 to 40).
         #[arg(long)]
         frequency: Option<f32>,
     },
+    /// Play one keep-awake pulse (or 2 s of the infrasound tone) on a bus now,
+    /// even when keep-awake is off, to try a level.
+    KeepAwakeTest { bus: u16 },
     /// Choose the capture device of a strip: "none", "default", a device
     /// name or id (see `mixercraft devices`), or `virtual:<name>` for a
     /// virtual playback device that applications play into.
@@ -171,6 +182,12 @@ enum AutostartCmd {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum KaMode {
+    Pulse,
+    Infrasound,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum OnOff {
     On,
     Off,
@@ -257,14 +274,22 @@ fn main() -> anyhow::Result<()> {
             }
             Request::SetStripFx { strip, fx }
         }
-        Cmd::KeepAwake { bus, state, level, frequency } => {
+        Cmd::KeepAwake { bus, state, mode, level, interval, frequency } => {
             let Response::Status(s) = c.request(&Request::Status)? else { anyhow::bail!("unexpected answer") };
             let mut keep_awake = s.buses.get(usize::from(bus)).context("no such bus")?.keep_awake;
             keep_awake.enabled = state.into();
+            if let Some(m) = mode {
+                keep_awake.mode = match m {
+                    KaMode::Pulse => mixercraft_ipc::KeepAwakeMode::Pulse,
+                    KaMode::Infrasound => mixercraft_ipc::KeepAwakeMode::Infrasound,
+                };
+            }
             keep_awake.level_db = level.unwrap_or(keep_awake.level_db);
+            keep_awake.interval_s = interval.unwrap_or(keep_awake.interval_s);
             keep_awake.frequency_hz = frequency.unwrap_or(keep_awake.frequency_hz);
             Request::SetBusKeepAwake { bus, keep_awake }
         }
+        Cmd::KeepAwakeTest { bus } => Request::TestBusKeepAwake { bus },
         Cmd::Shutdown => Request::Shutdown,
         Cmd::Capabilities
         | Cmd::LocalDevices
@@ -340,7 +365,15 @@ fn main() -> anyhow::Result<()> {
                     if b.mute { " M" } else { "" },
                     b.sink,
                     if b.keep_awake.enabled {
-                        format!("  keep-awake {:.0} Hz at {:.0} dBFS", b.keep_awake.frequency_hz, b.keep_awake.level_db)
+                        let k = b.keep_awake;
+                        match k.mode {
+                            mixercraft_ipc::KeepAwakeMode::Pulse => {
+                                format!("  keep-awake pulse every {:.0} s at {:.0} dBFS", k.interval_s, k.level_db)
+                            }
+                            mixercraft_ipc::KeepAwakeMode::Infrasound => {
+                                format!("  keep-awake {:.0} Hz at {:.0} dBFS", k.frequency_hz, k.level_db)
+                            }
+                        }
                     } else {
                         String::new()
                     }

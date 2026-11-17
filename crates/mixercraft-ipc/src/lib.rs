@@ -85,6 +85,9 @@ pub enum Request {
     RenameBus { bus: u16, name: String },
     /// Sets a bus's keep-awake tone (keeps auto-standby speakers on).
     SetBusKeepAwake { bus: u16, keep_awake: KeepAwake },
+    /// Plays one keep-awake pulse (or 2 s of the infrasound tone) on a bus
+    /// right away, even when keep-awake is off, to try a level.
+    TestBusKeepAwake { bus: u16 },
     /// Stores engine-wide settings in the configuration. They take effect
     /// when the engine restarts ([`EngineStatus::restart_required`]).
     SetEngineSettings { settings: EngineSettings },
@@ -281,23 +284,38 @@ impl Default for EngineSettings {
     }
 }
 
-/// Keep-awake tone of a bus: after 10 s of silence a quiet infrasonic sine
-/// keeps speakers with auto-standby from switching off.
+/// Keep-awake signal of a bus: keeps speakers with auto-standby from
+/// switching off.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct KeepAwake {
-    /// Whether the tone is used.
+    /// Whether keep-awake is used.
     pub enabled: bool,
-    /// Tone level (dBFS peak), -70 to -20.
+    /// Pulse or infrasound.
+    pub mode: KeepAwakeMode,
+    /// Signal level (dBFS peak), -70 to -20.
     pub level_db: f32,
-    /// Tone frequency (Hz), 5 to 40.
+    /// Infrasound frequency (Hz), 5 to 40.
     pub frequency_hz: f32,
+    /// Seconds of silence between pulses, 30 to 900.
+    pub interval_s: f32,
 }
 
 impl Default for KeepAwake {
     fn default() -> Self {
-        Self { enabled: false, level_db: -45.0, frequency_hz: 15.0 }
+        Self { enabled: false, mode: KeepAwakeMode::Pulse, level_db: -45.0, frequency_hz: 15.0, interval_s: 240.0 }
     }
+}
+
+/// What a keep-awake bus plays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum KeepAwakeMode {
+    /// A short quiet noise burst after each interval of silence.
+    #[default]
+    Pulse,
+    /// A continuous inaudible low sine after 10 s of silence.
+    Infrasound,
 }
 
 /// Gate, EQ and compressor settings of a strip.
@@ -756,6 +774,21 @@ mod tests {
         assert_eq!(json, r#"{"type":"set_route","strip":1,"bus":2,"enabled":true}"#);
         let json = serde_json::to_string(&Request::Status).unwrap();
         assert_eq!(json, r#"{"type":"status"}"#);
+        let json = serde_json::to_string(&Request::TestBusKeepAwake { bus: 0 }).unwrap();
+        assert_eq!(json, r#"{"type":"test_bus_keep_awake","bus":0}"#);
+        let keep_awake = KeepAwake { enabled: true, mode: KeepAwakeMode::Infrasound, ..Default::default() };
+        let json = serde_json::to_string(&Request::SetBusKeepAwake { bus: 1, keep_awake }).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"set_bus_keep_awake","bus":1,"keep_awake":{"enabled":true,"mode":"infrasound","level_db":-45.0,"frequency_hz":15.0,"interval_s":240.0}}"#
+        );
+        // A client from before pulses sends only the old fields.
+        let r: Request = serde_json::from_str(
+            r#"{"type":"set_bus_keep_awake","bus":1,"keep_awake":{"enabled":true,"level_db":-40.0,"frequency_hz":12.0}}"#,
+        )
+        .unwrap();
+        let Request::SetBusKeepAwake { keep_awake, .. } = r else { panic!() };
+        assert_eq!(keep_awake.interval_s, 240.0);
         let settings = EngineSettings {
             sample_rate: 44_100,
             latency_profile: LatencyProfile::MaxStability,

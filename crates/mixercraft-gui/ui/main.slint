@@ -155,6 +155,8 @@ export component MainWindow inherits Window {
     callback strip-fx(int, int, float);
     callback strip-denoise(int);
     callback bus-keep-awake(int);
+    callback bus-keep-awake-settings(int, bool, float, float);
+    callback bus-keep-awake-test(int);
     in property <bool> denoise-available: true;
     callback strip-device(int, int);
     callback strip-rename(int, string);
@@ -282,6 +284,8 @@ export component MainWindow inherits Window {
                         strip-fx(i, kind, v) => { root.strip-fx(i, kind, v); }
                         strip-denoise(i) => { root.strip-denoise(i); }
                         bus-keep-awake(i) => { root.bus-keep-awake(i); }
+                        bus-keep-awake-settings(i, p, l, s) => { root.bus-keep-awake-settings(i, p, l, s); }
+                        bus-keep-awake-test(i) => { root.bus-keep-awake-test(i); }
                         denoise-available: root.denoise-available;
                         strip-device(i, d) => { root.strip-device(i, d); }
                         bus-gain(i, p) => { root.bus-gain(i, p); }

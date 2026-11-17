@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// The schema version written by this build.
-pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+pub const CURRENT_SCHEMA_VERSION: u32 = 4;
 
 /// Gate thresholds at or below this mean "gate off" (mirrors the engine).
 pub const GATE_OFF_DB: f32 = -80.0;
@@ -268,22 +268,37 @@ pub struct BusConfig {
     pub keep_awake: KeepAwakeConfig,
 }
 
-/// Keep-awake tone of a bus (schema 3): after 10 s of silence a quiet
-/// infrasonic sine keeps speakers with auto-standby from switching off.
+/// Keep-awake signal of a bus (schema 3; `mode` and `interval_s` since
+/// schema 4): keeps speakers with auto-standby from switching off.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct KeepAwakeConfig {
-    /// Whether the tone is used.
+    /// Whether keep-awake is used.
     pub enabled: bool,
-    /// Tone level (dBFS peak), -70 to -20.
+    /// Pulse (default) or infrasound.
+    pub mode: KeepAwakeMode,
+    /// Signal level (dBFS peak), -70 to -20.
     pub level_db: f32,
-    /// Tone frequency (Hz), 5 to 40.
+    /// Infrasound frequency (Hz), 5 to 40.
     pub frequency_hz: f32,
+    /// Seconds of silence between pulses, 30 to 900.
+    pub interval_s: f32,
+}
+
+/// What a keep-awake bus plays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum KeepAwakeMode {
+    /// A short quiet noise burst after each interval of silence.
+    #[default]
+    Pulse,
+    /// A continuous inaudible low sine after 10 s of silence.
+    Infrasound,
 }
 
 impl Default for KeepAwakeConfig {
     fn default() -> Self {
-        Self { enabled: false, level_db: -45.0, frequency_hz: 15.0 }
+        Self { enabled: false, mode: KeepAwakeMode::Pulse, level_db: -45.0, frequency_hz: 15.0, interval_s: 240.0 }
     }
 }
 
@@ -296,7 +311,7 @@ impl KeepAwakeConfig {
 
     fn validate(&self, owner: &str) -> Result<(), ConfigError> {
         let ok = |v: f32, lo: f32, hi: f32| v.is_finite() && (lo..=hi).contains(&v);
-        if ok(self.level_db, -70.0, -20.0) && ok(self.frequency_hz, 5.0, 40.0) {
+        if ok(self.level_db, -70.0, -20.0) && ok(self.frequency_hz, 5.0, 40.0) && ok(self.interval_s, 30.0, 900.0) {
             Ok(())
         } else {
             Err(ConfigError::Invalid(format!("'{owner}' has keep-awake settings out of range")))
@@ -463,6 +478,7 @@ pub fn migrate(doc: toml::Table) -> Result<toml::Table, ConfigError> {
         // recurses, so every historical document has a tested path.
         1 => migrate(migrate_1_to_2(doc)),
         2 => migrate(migrate_2_to_3(doc)),
+        3 => migrate(migrate_3_to_4(doc)),
         _ => Ok(doc),
     }
 }
@@ -479,6 +495,21 @@ fn migrate_1_to_2(mut doc: toml::Table) -> toml::Table {
 /// engines reject the new fields, hence the version bump.)
 fn migrate_2_to_3(mut doc: toml::Table) -> toml::Table {
     doc.insert("schema_version".into(), toml::Value::Integer(3));
+    doc
+}
+
+/// Schema 4 added keep-awake `mode` (pulse or infrasound) and `interval_s`.
+/// Existing keep-awake tables were infrasound, so they keep that mode; new
+/// ones default to pulses.
+fn migrate_3_to_4(mut doc: toml::Table) -> toml::Table {
+    if let Some(toml::Value::Array(buses)) = doc.get_mut("buses") {
+        for bus in buses {
+            if let Some(toml::Value::Table(ka)) = bus.get_mut("keep_awake") {
+                ka.entry("mode").or_insert_with(|| toml::Value::String("infrasound".into()));
+            }
+        }
+    }
+    doc.insert("schema_version".into(), toml::Value::Integer(4));
     doc
 }
 
@@ -614,7 +645,7 @@ name = "Stream"
         assert!(c.strips.iter().all(|s| s.fx.is_off()));
         assert!(c.buses.iter().all(|b| b.keep_awake.is_default()));
         let saved = c.to_toml().unwrap();
-        assert!(saved.contains("schema_version = 3"));
+        assert!(saved.contains(&format!("schema_version = {CURRENT_SCHEMA_VERSION}")));
         assert!(!saved.contains("[strips.fx]"), "default processing is not written");
         assert!(!saved.contains("keep_awake"), "default keep-awake is not written");
     }
@@ -629,7 +660,7 @@ name = "Stream"
 comp_amount = 3.0",
         );
         let c = load_str(&v2).unwrap();
-        assert_eq!(c.schema_version, 3);
+        assert_eq!(c.schema_version, CURRENT_SCHEMA_VERSION);
         assert_eq!(c.strips[1].fx.comp_amount, 3.0, "fx of the second strip kept");
         assert!(!c.strips[1].fx.noise_suppression, "new settings default to off");
     }
@@ -638,13 +669,32 @@ comp_amount = 3.0",
     fn noise_suppression_and_keep_awake_roundtrip_and_validation() {
         let mut c = load_str(EXAMPLE).unwrap();
         c.strips[0].fx.noise_suppression = true;
-        c.buses[0].keep_awake = KeepAwakeConfig { enabled: true, level_db: -40.0, frequency_hz: 12.0 };
+        c.buses[0].keep_awake =
+            KeepAwakeConfig { enabled: true, level_db: -40.0, interval_s: 120.0, ..Default::default() };
         let text = c.to_toml().unwrap();
         assert!(text.contains("noise_suppression = true"));
         assert!(text.contains("[buses.keep_awake]"));
         assert_eq!(load_str(&text).unwrap(), c);
         let bad = text.replace("level_db = -40.0", "level_db = -5.0");
         assert!(matches!(load_str(&bad), Err(ConfigError::Invalid(_))));
+    }
+
+    #[test]
+    fn schema_3_keep_awake_stays_infrasound_and_new_ones_pulse() {
+        let v3 = EXAMPLE.replace("schema_version = 1", "schema_version = 3").replace(
+            r#"name = "Stream""#,
+            "name = \"Stream\"\n\n[buses.keep_awake]\nenabled = true\nlevel_db = -45.0\nfrequency_hz = 15.0",
+        );
+        assert!(v3.contains("[buses.keep_awake]"), "test document has a keep-awake table");
+        let c = load_str(&v3).unwrap();
+        assert_eq!(c.schema_version, 4);
+        let ka = c.buses.iter().find(|b| b.keep_awake.enabled).unwrap().keep_awake;
+        assert_eq!(ka.mode, KeepAwakeMode::Infrasound, "existing tone keeps its behaviour");
+        assert_eq!(ka.interval_s, 240.0);
+        assert_eq!(KeepAwakeConfig::default().mode, KeepAwakeMode::Pulse);
+        let text = c.to_toml().unwrap();
+        assert!(text.contains("mode = \"infrasound\""));
+        assert_eq!(load_str(&text).unwrap(), c);
     }
 
     #[test]
