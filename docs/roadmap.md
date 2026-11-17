@@ -29,7 +29,8 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
    USB product id.
 5. GUI: global hotkeys; Linux tray (KSNI); verify the sign-in toggles of the Settings tab at an actual sign-in.
 6. Native WASAPI backend for low latency.
-7. macOS HAL plug-in; Windows driver once signing is arranged.
+7. macOS HAL plug-in ([ADR 0010](adr/0010-macos-virtual-devices.md): CI
+   spike for ad-hoc signing first); Windows driver once signing is arranged.
 8. Releases: sign feed manifests (minisign) and apply to SignPath for
    Authenticode; per-machine MSI once a service mode exists.
 

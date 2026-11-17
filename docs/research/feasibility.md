@@ -114,7 +114,9 @@ PipeWire provides virtual devices natively:
 * An **AudioServerPlugIn** (HAL plug-in) bundle in
   `/Library/Audio/Plug-Ins/HAL` is loaded by `coreaudiod` in user space.
   Installation needs administrator rights and a `coreaudiod` restart; no SIP
-  changes. The bundle must be Developer ID signed and notarized. This is how
+  changes. The original assumption was that the bundle must be Developer ID
+  signed and notarized; ADR 0010 proposes an ad-hoc signed plug-in in an
+  unsigned `.pkg` instead, to be verified in a CI spike. This is how
   BlackHole works. BlackHole is GPL-3.0, so we study its architecture but do
   **not** copy code; Apple's NullAudio plug-in sample is the starting point.
 * **AudioDriverKit** targets hardware-backed drivers and requires
