@@ -123,12 +123,15 @@ pub(crate) fn info(name: &str) -> StreamInfo {
 
 type OnError = Box<dyn FnMut(StreamFault) + Send>;
 
+type OnSinkData = Box<dyn FnMut(&[f32]) + Send>;
+type OnSourceData = Box<dyn FnMut(&mut [f32]) + Send>;
+
 /// The engine side of a virtual device.
 enum Port {
     /// Applications play into it; the engine receives their audio.
-    Sink(Box<dyn FnMut(&[f32]) + Send>),
+    Sink(OnSinkData),
     /// Applications record from it; the engine fills it.
-    Source(Box<dyn FnMut(&mut [f32]) + Send>),
+    Source(OnSourceData),
 }
 
 /// Wanted names: (virtual name, is sink) -> strip or bus name.
@@ -255,8 +258,8 @@ impl Io {
                 for block in bytes.chunks(self.scratch.len() * 4) {
                     let frames = block.len() / STRIDE;
                     let out = &mut self.scratch[..frames * CHANNELS];
-                    for (o, b) in out.iter_mut().zip(block.chunks_exact(4)) {
-                        *o = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                    for (o, b) in out.iter_mut().zip(block.as_chunks::<4>().0) {
+                        *o = f32::from_le_bytes(*b);
                     }
                     on_data(out);
                 }
@@ -269,7 +272,7 @@ impl Io {
                 for block in bytes[..frames * STRIDE].chunks_mut(self.scratch.len() * 4) {
                     let buf = &mut self.scratch[..block.len() / 4];
                     on_data(buf);
-                    for (o, s) in block.chunks_exact_mut(4).zip(buf.iter()) {
+                    for (o, s) in block.as_chunks_mut::<4>().0.iter_mut().zip(buf.iter()) {
                         o.copy_from_slice(&s.clamp(-1.0, 1.0).to_le_bytes());
                     }
                 }
