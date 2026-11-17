@@ -79,8 +79,10 @@ Output in `target/packages/`:
 | `*.sha256` | checksums (`sha256sum -c`) |
 
 Options: `--version X.Y.Z`, `--feed <url>` (compiled-in update feed),
-`--skip-cargo`. Release packages are built on Ubuntu 22.04, so they run on
-distributions with glibc 2.35 or newer. There is no AppImage: autostart
+`--skip-cargo`. Release packages are built in a Debian 12 container, so they
+run on distributions with glibc 2.36 and PipeWire 0.3.49 or newer (Debian 12,
+Ubuntu 24.04, Fedora 37 and later; Ubuntu 22.04's PipeWire is too old for the
+virtual devices). There is no AppImage: autostart
 entries and the engine the app starts would point into the AppImage's
 temporary mount, which disappears when the app exits.
 

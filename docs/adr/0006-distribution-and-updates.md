@@ -118,7 +118,8 @@ Decided 2026-11-17, within the zero-recurring-cost constraint:
   `scripts/package-macos.sh`.
 * **Linux:** a `.deb` (dependencies from `dpkg-shlibdeps`) and a portable
   `.tar.gz` with a per-user `install.sh` (to `~/.local`), for x86_64 and
-  ARM64, built on Ubuntu 22.04 for glibc 2.35+. **No AppImage**: the app
+  ARM64, built in a Debian 12 container for glibc 2.36+ and PipeWire
+  0.3.49+ (virtual devices, ADR 0009). **No AppImage**: the app
   starts the engine from its own folder and autostart entries point there,
   but an AppImage's folder is a temporary mount that disappears when the app
   exits. `.rpm` and Flatpak are not built yet.

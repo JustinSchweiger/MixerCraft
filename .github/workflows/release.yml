@@ -32,8 +32,9 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
-  # Ubuntu 22.04: packages built there run on distributions with glibc 2.35
-  # or newer (Ubuntu 22.04+, Debian 12+, Fedora 36+).
+  # Linux packages are built in a Debian 12 container: glibc 2.36 (they run
+  # on Debian 12+, Ubuntu 24.04+, Fedora 37+) and PipeWire 0.3.65 headers
+  # (virtual devices need 0.3.49+, newer than Ubuntu 22.04's 0.3.48).
   LINUX_DEPS: libasound2-dev libpipewire-0.3-dev libclang-dev pkg-config libfontconfig1-dev libxkbcommon-dev libwayland-dev dpkg-dev desktop-file-utils
 
 jobs:
@@ -44,8 +45,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arch: x86_64, os: ubuntu-22.04 }
-          - { arch: arm64, os: ubuntu-22.04-arm }
+          - { arch: x86_64, os: ubuntu-24.04 }
+          - { arch: arm64, os: ubuntu-24.04-arm }
+    container: debian:12
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -56,7 +58,8 @@ jobs:
         run: |
           v="$(awk '/^\[workspace\.package\]/{w=1;next} /^\[/{w=0} w && /^version *=/{gsub(/.*= *"|".*/,""); print; exit}' Cargo.toml)"
           [ "v$v" = "${{ inputs.tag }}" ] || { echo "tag ${{ inputs.tag }} does not match version $v"; exit 1; }
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $LINUX_DEPS
+      # The container runs as root: no sudo.
+      - run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git build-essential $LINUX_DEPS
       - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
           toolchain: stable
@@ -67,14 +70,14 @@ jobs:
       - name: Smoke test (.deb)
         run: |
           desktop-file-validate assets/linux/mixercraft.desktop
-          sudo apt-get install -y ./target/packages/mixercraft_*.deb
+          apt-get install -y ./target/packages/mixercraft_*.deb
           mixercraft --version
           mixercraftd --version
           test -x /usr/bin/mixercraft-gui
           test -f /usr/share/applications/mixercraft.desktop
           test -f /usr/share/icons/hicolor/256x256/apps/mixercraft.png
           dpkg -s mixercraft | grep -E '^(Version|Depends):'
-          sudo apt-get remove -y mixercraft
+          apt-get remove -y mixercraft
           ! test -e /usr/bin/mixercraft
       - name: Smoke test (.tar.gz)
         run: |
