@@ -22,23 +22,36 @@ run glitch-free.
 ## Linux
 
 ```bash
-sudo apt-get install libasound2-dev pkg-config
+sudo apt-get install libasound2-dev libpipewire-0.3-dev libclang-dev pkg-config
 ```
 
-Optional native PipeWire host (`--features mixercraft-platform/pipewire`):
+PipeWire (headers 0.3.49 or newer) is needed for virtual devices, which are
+PipeWire nodes ([ADR 0009](../adr/0009-linux-virtual-devices.md)); the
+engine still runs without a PipeWire daemon. Physical devices use ALSA
+(served by pipewire-alsa on PipeWire systems); the optional native PipeWire
+host for them is `--features mixercraft-platform/pipewire`.
 
-```bash
-sudo apt-get install libpipewire-0.3-dev libclang-dev
-```
+Virtual-device test against the session's PipeWire (needs `pipewire-bin`
+and python3; nothing is audible): `cargo build -p mixercraft-engine -p
+mixercraft-cli && scripts/test-pipewire-virtual.sh`.
 
 Fedora: `alsa-lib-devel pipewire-devel clang-devel`.
+
+Desktop app (Slint/winit) and packages (`scripts/package-linux.sh`):
+
+```bash
+sudo apt-get install libfontconfig1-dev libxkbcommon-dev libwayland-dev dpkg-dev
+```
 
 ## macOS
 
 * Xcode command-line tools.
 * Universal builds: `rustup target add x86_64-apple-darwin aarch64-apple-darwin`.
 * Microphone access: the first capture triggers the system permission prompt
-  for the launching application (Terminal when run from a shell).
+  for the launching application (Terminal when run from a shell). Packaged
+  builds carry the usage text in the bundle's and the engine's Info.plist.
+* App bundle and disk image: `scripts/package-macos.sh` (see
+  [releasing.md](releasing.md)).
 
 ## Useful commands
 

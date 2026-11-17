@@ -85,7 +85,7 @@ pub fn support(feature: Feature) -> (Support, &'static str) {
         F::PerAppCapture => per_app_capture(),
         F::PreLoginEngine => pre_login(),
         F::SessionAutostart => session_autostart(),
-        F::InAppUpdates => (S::Planned, "Updater is scheduled for phase 9"),
+        F::InAppUpdates => in_app_updates(),
     }
 }
 
@@ -127,7 +127,13 @@ fn virtual_endpoints() -> (Support, &'static str) {
 }
 #[cfg(target_os = "linux")]
 fn virtual_endpoints() -> (Support, &'static str) {
-    (Support::Planned, "PipeWire null-audio-sink nodes; no driver needed")
+    match crate::virtual_dev::unavailable_reason() {
+        None => (
+            Support::Partial,
+            "PipeWire sink/source nodes owned by the engine; tested against PipeWire without audio hardware only",
+        ),
+        Some(_) => (Support::Unsupported, "Virtual devices need PipeWire running in this session"),
+    }
 }
 #[cfg(target_os = "macos")]
 fn virtual_endpoints() -> (Support, &'static str) {
@@ -136,6 +142,18 @@ fn virtual_endpoints() -> (Support, &'static str) {
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 fn virtual_endpoints() -> (Support, &'static str) {
     (Support::Unsupported, "No virtual device mechanism on this platform")
+}
+
+#[cfg(windows)]
+fn in_app_updates() -> (Support, &'static str) {
+    (
+        Support::Partial,
+        "Checks the release feed, downloads and verifies the per-user MSI and installs it; manifests are not signed yet",
+    )
+}
+#[cfg(not(windows))]
+fn in_app_updates() -> (Support, &'static str) {
+    (Support::Partial, "Checks the release feed and links to the release page; install the new package yourself")
 }
 
 #[cfg(windows)]

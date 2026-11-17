@@ -1,7 +1,9 @@
 # 0006 — Distribution and update architecture
 
 **Status:** Accepted for Windows (per-user MSI and in-app updater implemented,
-2026-11-16); macOS and Linux packages still proposed.
+2026-11-16); Linux and macOS packages implemented 2026-11-17 (see
+"Linux and macOS packages" below; they replace the proposals for those
+platforms in this decision).
 
 ## Context
 Users must install without compiling, drivers and plug-ins must be provisioned
@@ -99,6 +101,40 @@ client does not depend on this: `-Feed` of the build script sets the
 built-in URL (empty = no checks; the About page then says so), `updates.toml`
 (`feed_url = "…"`) overrides it, and a `file://` folder feed works for local
 testing. Moving to option A or C later only changes that URL.
+
+## Linux and macOS packages
+
+Decided 2026-11-17, within the zero-recurring-cost constraint:
+
+* **macOS:** a universal `.dmg` with `MixerCraft.app` (GUI as the bundle's
+  executable, engine and CLI next to it), **ad-hoc signed and not
+  notarized** — a Developer ID costs a yearly fee. Users allow the first
+  start once (System Settings → Privacy & Security → Open Anyway). The
+  engine embeds its own Info.plist (microphone usage text) because launchd
+  starts it outside the bundle's main executable. No `.pkg` until there is
+  something to install outside the bundle (the HAL plug-in, which needs a
+  Developer ID anyway; see the macOS virtual-device ADR when written). If the
+  owner later buys a Developer ID, signing and notarization slot into
+  `scripts/package-macos.sh`.
+* **Linux:** a `.deb` (dependencies from `dpkg-shlibdeps`) and a portable
+  `.tar.gz` with a per-user `install.sh` (to `~/.local`), for x86_64 and
+  ARM64, built in a Debian 12 container for glibc 2.36+ and PipeWire
+  0.3.49+ (virtual devices, ADR 0009). **No AppImage**: the app
+  starts the engine from its own folder and autostart entries point there,
+  but an AppImage's folder is a temporary mount that disappears when the app
+  exits. `.rpm` and Flatpak are not built yet.
+* **Release workflow:** `.github/workflows/release.yml` builds and
+  smoke-tests these packages, as a dry run on pull requests that touch
+  packaging, and attaches them to an existing GitHub release when started
+  by hand with its tag. The Windows MSI and `latest.json` are still built
+  locally.
+* **Updates on Linux and macOS are notify-only:** `latest.json` lists only the
+  MSI; the app reports the new version and links to the release page
+  (`notes_url`, or `…/releases/latest` for GitHub feeds). Replacing an app
+  bundle or a distribution package from inside the app is left out: the
+  package manager owns `/usr/bin`, and a self-replacing ad-hoc signed bundle
+  would lose its microphone permission anyway. The capability model reports
+  `InAppUpdates` as partial with this explanation.
 
 ## Consequences
 More packaging work than a single cross-platform bundler, in exchange for

@@ -1,0 +1,163 @@
+name: Release packages
+
+# Builds and smoke-tests the Linux (.deb, .tar.gz) and macOS (.dmg)
+# packages. On pull requests that touch packaging it is a dry run (packages
+# are kept as workflow artifacts). Run it by hand with a release tag to
+# attach the packages to that GitHub release; the Windows MSI and
+# latest.json are built locally (docs/development/releasing.md). Nothing is
+# ever published from a push to main.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and attach the packages to (e.g. v0.2.0); empty: build from main without uploading"
+        required: false
+        default: ""
+  pull_request:
+    paths:
+      - "scripts/package-*.sh"
+      - "scripts/linux-install.sh"
+      - ".github/workflows/release.yml"
+      - "assets/linux/**"
+      - "assets/macos/**"
+      - "crates/mixercraft-engine/build.rs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}-${{ inputs.tag }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # Linux packages are built in a Debian 12 container: glibc 2.36 (they run
+  # on Debian 12+, Ubuntu 24.04+, Fedora 37+) and PipeWire 0.3.65 headers
+  # (virtual devices need 0.3.49+, newer than Ubuntu 22.04's 0.3.48).
+  LINUX_DEPS: libasound2-dev libpipewire-0.3-dev libclang-dev pkg-config libfontconfig1-dev libxkbcommon-dev libwayland-dev dpkg-dev desktop-file-utils
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, os: ubuntu-24.04 }
+          - { arch: arm64, os: ubuntu-24.04-arm }
+    container: debian:12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Check tag matches version
+        if: inputs.tag != ''
+        run: |
+          v="$(awk '/^\[workspace\.package\]/{w=1;next} /^\[/{w=0} w && /^version *=/{gsub(/.*= *"|".*/,""); print; exit}' Cargo.toml)"
+          [ "v$v" = "${{ inputs.tag }}" ] || { echo "tag ${{ inputs.tag }} does not match version $v"; exit 1; }
+      # The container runs as root: no sudo.
+      - run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git build-essential $LINUX_DEPS
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: release
+      - run: scripts/package-linux.sh
+      - name: Smoke test (.deb)
+        run: |
+          desktop-file-validate assets/linux/mixercraft.desktop
+          apt-get install -y ./target/packages/mixercraft_*.deb
+          mixercraft --version
+          mixercraftd --version
+          test -x /usr/bin/mixercraft-gui
+          test -f /usr/share/applications/mixercraft.desktop
+          test -f /usr/share/icons/hicolor/256x256/apps/mixercraft.png
+          dpkg -s mixercraft | grep -E '^(Version|Depends):'
+          apt-get remove -y mixercraft
+          ! test -e /usr/bin/mixercraft
+      - name: Smoke test (.tar.gz)
+        run: |
+          cd "$RUNNER_TEMP"
+          tar xzf "$GITHUB_WORKSPACE"/target/packages/mixercraft-*-linux-*.tar.gz
+          ./mixercraft-*-linux-*/install.sh --prefix "$RUNNER_TEMP/prefix"
+          "$RUNNER_TEMP/prefix/bin/mixercraft" --version
+          grep -q "^Exec=\"$RUNNER_TEMP/prefix/bin/mixercraft-gui\"" "$RUNNER_TEMP/prefix/share/applications/mixercraft.desktop"
+          desktop-file-validate "$RUNNER_TEMP/prefix/share/applications/mixercraft.desktop"
+          ./mixercraft-*-linux-*/install.sh --prefix "$RUNNER_TEMP/prefix" --uninstall
+          ! test -e "$RUNNER_TEMP/prefix/bin/mixercraft"
+      - name: Verify checksums
+        run: cd target/packages && sha256sum -c ./*.sha256
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packages-linux-${{ matrix.arch }}
+          path: |
+            target/packages/*.deb
+            target/packages/*.tar.gz
+            target/packages/*.sha256
+          retention-days: 14
+
+  macos:
+    name: macOS universal
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: release
+      - run: scripts/package-macos.sh
+      - name: Smoke test (.dmg)
+        run: |
+          cd target/packages && shasum -a 256 -c ./*.sha256 && cd -
+          mnt="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" target/packages/MixerCraft-*.dmg
+          app="$mnt/MixerCraft.app"
+          codesign --verify --strict --verbose=2 "$app"
+          plutil -p "$app/Contents/Info.plist"
+          for b in mixercraft-gui mixercraftd mixercraft; do
+            lipo -archs "$app/Contents/MacOS/$b" | grep -q "x86_64 arm64"
+          done
+          "$app/Contents/MacOS/mixercraft" --version
+          "$app/Contents/MacOS/mixercraftd" --version
+          # The engine's own Info.plist (microphone permission text).
+          otool -s __TEXT __info_plist "$app/Contents/MacOS/mixercraftd" | grep -q 'Contents of (__TEXT,__info_plist)'
+          hdiutil detach "$mnt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packages-macos-universal
+          path: |
+            target/packages/*.dmg
+            target/packages/*.sha256
+          retention-days: 14
+
+  upload:
+    name: Attach to release ${{ inputs.tag }}
+    if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+    needs: [linux, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: packages-*
+          path: packages
+          merge-multiple: true
+      - name: Upload to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          ls -l packages
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          gh release upload "$TAG" packages/* --clobber --repo "$GITHUB_REPOSITORY"

@@ -18,7 +18,8 @@ distribution, updates 9. Extensibility.
 * `crates/mixercraft-config` — TOML schema v3, migrations, atomic saves.
 * `crates/mixercraft-ipc` — NDJSON protocol v1, local socket transport.
 * `crates/mixercraft-platform` — capability model + cpal device I/O +
-  virtual devices (`virtual_dev`, ids `virtual:<name>`).
+  virtual devices (`virtual_dev`, ids `virtual:<name>`; Linux: PipeWire
+  nodes in `pipewire_dev`, ADR 0009).
 * `crates/mixercraft-usbip` — user-space USB/IP server emulating USB audio
   devices (Windows virtual devices via usbip-win2, ADR 0007).
 * `crates/mixercraft-winaudio` — the only crate with `unsafe` (COM): restores
