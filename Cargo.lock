@@ -3379,9 +3379,11 @@ dependencies = [
 name = "mixercraft-platform"
 version = "0.1.0"
 dependencies = [
+ "audio_thread_priority",
  "cpal",
  "mixercraft-usbip",
  "mixercraft-winaudio",
+ "pipewire",
  "thiserror 2.0.21",
 ]
 

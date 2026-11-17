@@ -286,12 +286,7 @@ fn read_frames(bytes: &[u8], scratch: &mut [f32], on_data: &mut dyn FnMut(&[f32]
 /// Fills `bytes` with `requested` frames (or [`FALLBACK_FRAMES`] when
 /// PipeWire does not say, at most what fits) from `on_data`, as F32LE
 /// clamped to ±1. Returns the number of frames written. Real-time safe.
-fn write_frames(
-    bytes: &mut [u8],
-    requested: usize,
-    scratch: &mut [f32],
-    on_data: &mut dyn FnMut(&mut [f32]),
-) -> usize {
+fn write_frames(bytes: &mut [u8], requested: usize, scratch: &mut [f32], on_data: &mut dyn FnMut(&mut [f32])) -> usize {
     let wanted = if requested > 0 { requested } else { FALLBACK_FRAMES };
     let frames = wanted.min(bytes.len() / STRIDE);
     let block_bytes = (scratch.len() / CHANNELS) * STRIDE;
@@ -486,8 +481,7 @@ mod tests {
             }
         });
         assert_eq!((frames, next), (5, 10));
-        let back: Vec<f32> =
-            out[..frames * STRIDE].as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect();
+        let back: Vec<f32> = out[..frames * STRIDE].as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect();
         assert_eq!(back[0], 1.0);
         assert_eq!(back[1..], samples[1..]);
         // Unknown request: the fallback, limited by the buffer.

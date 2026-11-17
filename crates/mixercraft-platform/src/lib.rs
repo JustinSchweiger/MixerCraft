@@ -521,7 +521,10 @@ impl Default for AudioSystem {
 /// Boxes the handle of an opened virtual device (PipeWire can fail to
 /// create the node; a USB/IP device always opens and reports later).
 #[cfg(target_os = "linux")]
-fn virtual_handle(name: &str, handle: Result<pipewire_dev::Handle, String>) -> Result<Box<dyn std::any::Any>, PlatformError> {
+fn virtual_handle(
+    name: &str,
+    handle: Result<pipewire_dev::Handle, String>,
+) -> Result<Box<dyn std::any::Any>, PlatformError> {
     match handle {
         Ok(h) => Ok(Box::new(h)),
         Err(why) => Err(virtual_dev::unavailable(name, &why)),
@@ -529,7 +532,10 @@ fn virtual_handle(name: &str, handle: Result<pipewire_dev::Handle, String>) -> R
 }
 #[cfg(not(target_os = "linux"))]
 #[allow(clippy::unnecessary_wraps)] // same signature as on Linux
-fn virtual_handle(_name: &str, handle: mixercraft_usbip::DeviceHandle) -> Result<Box<dyn std::any::Any>, PlatformError> {
+fn virtual_handle(
+    _name: &str,
+    handle: mixercraft_usbip::DeviceHandle,
+) -> Result<Box<dyn std::any::Any>, PlatformError> {
     Ok(Box::new(handle))
 }
 
