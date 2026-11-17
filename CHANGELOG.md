@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Quitting the desktop app (tray "Quit MixerCraft", the close button when it
+  is set to quit, or an update) now also stops the audio engine: app and
+  audio start and stop together. Hiding the window to the tray keeps audio
+  running as before.
+
+### Added
+- The window remembers its position, size and maximised state (saved in
+  `gui.toml` when it is hidden or the app quits) and reopens there; a
+  position that is no longer on any screen (e.g. an unplugged monitor) is
+  moved to the primary screen.
+
 ### Fixed
 - Linux and macOS CI: Windows-only code (`mixercraft-winaudio`'s role list,
   the tray's "stop engine" command) failed the `-D warnings` builds; two
