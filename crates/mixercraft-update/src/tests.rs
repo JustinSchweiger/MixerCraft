@@ -107,6 +107,21 @@ fn release_without_installer_for_this_platform_is_still_reported() {
         panic!()
     };
     assert!(r.asset.is_none());
+    assert_eq!(r.notes_url, "", "no notes page and not a GitHub feed");
+}
+
+#[test]
+fn github_feeds_fall_back_to_the_release_page() {
+    let feed = "https://github.com/o/r/releases/latest/download/latest.json";
+    assert_eq!(release_page(feed).as_deref(), Some("https://github.com/o/r/releases/latest"));
+    assert_eq!(release_page("https://example.org/releases/latest/download/latest.json"), None);
+    assert_eq!(release_page("file:///C:/rel/latest.json"), None);
+    let mut m = manifest("0.2.0", "x.msi", &"0".repeat(64), 10);
+    let Check::Available(r) = evaluate(&m, feed, "0.1.0", None).unwrap() else { panic!() };
+    assert_eq!(r.notes_url, "https://github.com/o/r/releases/latest");
+    m.notes_url = "https://github.com/o/r/releases/tag/v0.2.0".into();
+    let Check::Available(r) = evaluate(&m, feed, "0.1.0", None).unwrap() else { panic!() };
+    assert_eq!(r.notes_url, m.notes_url, "the manifest's page wins");
 }
 
 #[test]
