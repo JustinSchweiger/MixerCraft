@@ -97,7 +97,8 @@ EOF
 
 # Shared-library dependencies of the binaries, as Debian package names. The
 # window system libraries (xkbcommon, Wayland, X11) are loaded at run time
-# by winit, so they are listed by hand in the control file.
+# by winit, so they are listed by hand in the control file: without
+# libxkbcommon-x11 the app panics at start (seen in WSLg).
 shlib_dir="$work/shlibdeps"
 mkdir -p "$shlib_dir/debian"
 printf 'Source: mixercraft\n\nPackage: mixercraft\nArchitecture: any\n' > "$shlib_dir/debian/control"
@@ -112,8 +113,8 @@ Version: $version
 Architecture: $deb_arch
 Maintainer: MixerCraft contributors <https://github.com/JustinSchweiger/MixerCraft/issues>
 Installed-Size: $installed_kb
-Depends: $depends, libxkbcommon0
-Recommends: pipewire-alsa | pulseaudio, libwayland-client0, libxkbcommon-x11-0
+Depends: $depends, libxkbcommon0, libxkbcommon-x11-0
+Recommends: pipewire-alsa | pulseaudio, libwayland-client0
 Section: sound
 Priority: optional
 Homepage: https://github.com/JustinSchweiger/MixerCraft
