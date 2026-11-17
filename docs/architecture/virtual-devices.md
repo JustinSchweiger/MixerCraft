@@ -100,15 +100,24 @@ Decision and alternatives: [ADR 0009](../adr/0009-linux-virtual-devices.md).
 * Test: `scripts/test-pipewire-virtual.sh` (also a CI job) plays a tone into
   the sink node and records it from the source node.
 
-## macOS
+## macOS (planned)
+
+Proposal and plan: [ADR 0010](../adr/0010-macos-virtual-devices.md).
 
 * AudioServerPlugIn bundle (`MixerCraft.driver`) in
   `/Library/Audio/Plug-Ins/HAL`, based on Apple's NullAudio sample, written
-  in C with a minimal surface: device/stream properties and a lock-free ring
-  per cable between the output and input sides.
-* Installed by the signed `.pkg` (post-install: restart `coreaudiod`).
-  Removal deletes the bundle and restarts `coreaudiod`.
-* Per-application capture via Core Audio process taps on macOS 14.2+.
+  in C with a minimal surface: device/stream properties and a lock-free
+  **loopback** ring per device between its output and input sides. The
+  engine uses the devices through Core Audio like physical ones (capture a
+  strip's device, play into a bus's device), so there is no IPC with the
+  sandboxed `coreaudiod`.
+* Devices are added and removed through a custom property on the plug-in
+  object and persisted with the host's storage API.
+* Installed by an unsigned `.pkg` (post-install: restart `coreaudiod`), the
+  plug-in ad-hoc signed — to be confirmed in a CI spike first. Removal
+  deletes the bundle and restarts `coreaudiod`.
+* Per-application capture via Core Audio process taps on macOS 14.2+
+  (separate feature).
 
 ## Status
 

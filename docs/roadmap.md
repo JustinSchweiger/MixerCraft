@@ -18,7 +18,9 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 
 ## Next steps, in order
 
-1. Linux and macOS hardware verification of the current engine.
+1. Linux and macOS hardware verification of the current engine, packages,
+   tray, sign-in start and Linux virtual devices
+   ([checklist](development/testing-linux-macos.md)).
 2. Engine autostart per platform (Windows: per-user first, service mode
    with startup-sound timing test; Linux: systemd user unit; macOS:
    LaunchAgent).
@@ -31,7 +33,8 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
    with AppIndicator); verify the sign-in toggles of the Settings tab at an
    actual sign-in (Windows, Linux, macOS).
 6. Native WASAPI backend for low latency.
-7. macOS HAL plug-in; Windows driver once signing is arranged.
+7. macOS HAL plug-in ([ADR 0010](adr/0010-macos-virtual-devices.md): CI
+   spike for ad-hoc signing first); Windows driver once signing is arranged.
 8. Releases: sign feed manifests (minisign) and apply to SignPath for
    Authenticode; per-machine MSI once a service mode exists.
 

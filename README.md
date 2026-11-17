@@ -94,6 +94,7 @@ These builds are tested in CI (and Linux in WSL2), not yet on real Linux or Mac 
 | Guide | Topic |
 |---|---|
 | [releasing.md](docs/development/releasing.md) | Building the installers and packages, publishing a release |
+| [testing-linux-macos.md](docs/development/testing-linux-macos.md) | Checklist for the first runs on Linux and Mac hardware |
 | [building.md](docs/development/building.md) | Building from source on each platform |
 | [overview.md](docs/architecture/overview.md) | How the engine, IPC and app fit together |
 | [virtual-devices.md](docs/architecture/virtual-devices.md) | How virtual devices work |

@@ -15,5 +15,6 @@ mind is a new record that supersedes the old one.
 | [0007](0007-windows-driver-signing.md) | Windows virtual endpoints and driver signing | Proposed — zero-cost path |
 | [0008](0008-license.md) | Project license (MIT OR Apache-2.0) | Accepted |
 | [0009](0009-linux-virtual-devices.md) | Linux virtual devices as PipeWire stream nodes | Accepted |
+| [0010](0010-macos-virtual-devices.md) | macOS virtual devices: loopback Audio Server Plug-in | Proposed |
 
 Template: copy an existing record, keep it short, link evidence.
