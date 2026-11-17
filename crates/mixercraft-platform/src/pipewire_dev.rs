@@ -254,28 +254,11 @@ impl Io {
                 let (offset, size) = (data.chunk().offset() as usize, data.chunk().size() as usize);
                 let Some(bytes) = data.data() else { return };
                 let end = offset.saturating_add(size).min(bytes.len());
-                let bytes = &bytes[offset.min(end)..end];
-                for block in bytes.chunks(self.scratch.len() * 4) {
-                    let frames = block.len() / STRIDE;
-                    let out = &mut self.scratch[..frames * CHANNELS];
-                    for (o, b) in out.iter_mut().zip(block.as_chunks::<4>().0) {
-                        *o = f32::from_le_bytes(*b);
-                    }
-                    on_data(out);
-                }
+                read_frames(&bytes[offset.min(end)..end], &mut self.scratch, on_data);
             }
             Port::Source(on_data) => {
                 let Some(bytes) = data.data() else { return };
-                let capacity = bytes.len() / STRIDE;
-                let wanted = if requested > 0 { requested } else { FALLBACK_FRAMES };
-                let frames = wanted.min(capacity);
-                for block in bytes[..frames * STRIDE].chunks_mut(self.scratch.len() * 4) {
-                    let buf = &mut self.scratch[..block.len() / 4];
-                    on_data(buf);
-                    for (o, s) in block.as_chunks_mut::<4>().0.iter_mut().zip(buf.iter()) {
-                        o.copy_from_slice(&s.clamp(-1.0, 1.0).to_le_bytes());
-                    }
-                }
+                let frames = write_frames(bytes, requested, &mut self.scratch, on_data);
                 let chunk = data.chunk_mut();
                 *chunk.offset_mut() = 0;
                 *chunk.stride_mut() = STRIDE as i32;
@@ -283,6 +266,43 @@ impl Io {
             }
         }
     }
+}
+
+/// Hands the F32LE frames in `bytes` to `on_data` as `f32`, in blocks of at
+/// most `scratch.len()` samples. Real-time safe: no allocation.
+fn read_frames(bytes: &[u8], scratch: &mut [f32], on_data: &mut dyn FnMut(&[f32])) {
+    for block in bytes.chunks(scratch.len() * 4) {
+        let frames = block.len() / STRIDE;
+        let out = &mut scratch[..frames * CHANNELS];
+        for (o, b) in out.iter_mut().zip(block.as_chunks::<4>().0) {
+            *o = f32::from_le_bytes(*b);
+        }
+        if !out.is_empty() {
+            on_data(out);
+        }
+    }
+}
+
+/// Fills `bytes` with `requested` frames (or [`FALLBACK_FRAMES`] when
+/// PipeWire does not say, at most what fits) from `on_data`, as F32LE
+/// clamped to ±1. Returns the number of frames written. Real-time safe.
+fn write_frames(
+    bytes: &mut [u8],
+    requested: usize,
+    scratch: &mut [f32],
+    on_data: &mut dyn FnMut(&mut [f32]),
+) -> usize {
+    let wanted = if requested > 0 { requested } else { FALLBACK_FRAMES };
+    let frames = wanted.min(bytes.len() / STRIDE);
+    let block_bytes = (scratch.len() / CHANNELS) * STRIDE;
+    for block in bytes[..frames * STRIDE].chunks_mut(block_bytes) {
+        let buf = &mut scratch[..block.len() / 4];
+        on_data(buf);
+        for (o, s) in block.as_chunks_mut::<4>().0.iter_mut().zip(buf.iter()) {
+            *o = s.clamp(-1.0, 1.0).to_le_bytes();
+        }
+    }
+    frames
 }
 
 /// The `EnumFormat` parameter: F32LE stereo at [`RATE`].
@@ -442,6 +462,36 @@ mod tests {
         assert_eq!(node_name("  Voice / Chat!! ", true), "mixercraft.sink.voice-chat");
         assert_eq!(node_name("Ära", true), "mixercraft.sink.ra");
         assert_eq!(node_name("???", true), "mixercraft.sink.device");
+    }
+
+    #[test]
+    fn frames_convert_both_ways_in_blocks() {
+        // 5 stereo frames through a 2-frame scratch buffer: blocks of 2, 2, 1.
+        let samples: Vec<f32> = (0..10).map(|i| i as f32 / 10.0).collect();
+        let bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let mut scratch = [0.0f32; 4];
+        let (mut got, mut calls) = (Vec::new(), 0);
+        read_frames(&bytes, &mut scratch, &mut |b: &[f32]| {
+            calls += 1;
+            got.extend_from_slice(b);
+        });
+        assert_eq!((got, calls), (samples.clone(), 3));
+
+        let mut out = vec![0u8; 8 * STRIDE];
+        let mut next = 0;
+        let frames = write_frames(&mut out, 5, &mut scratch, &mut |b: &mut [f32]| {
+            for s in b {
+                *s = if next == 0 { 3.0 } else { next as f32 / 10.0 }; // over full scale clamps
+                next += 1;
+            }
+        });
+        assert_eq!((frames, next), (5, 10));
+        let back: Vec<f32> =
+            out[..frames * STRIDE].as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect();
+        assert_eq!(back[0], 1.0);
+        assert_eq!(back[1..], samples[1..]);
+        // Unknown request: the fallback, limited by the buffer.
+        assert_eq!(write_frames(&mut out, 0, &mut scratch, &mut |_| {}), 8);
     }
 
     #[test]
