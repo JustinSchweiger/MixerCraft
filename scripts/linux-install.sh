@@ -25,17 +25,11 @@ done
 bins="mixercraft-gui mixercraftd mixercraft"
 icons="$(cd "$here/share/icons" && find hicolor -name 'mixercraft.png')"
 
-refresh() {
-    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q "$prefix/share/applications" || true
-    command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t "$prefix/share/icons/hicolor" || true
-}
-
 if [ "$uninstall" -eq 1 ]; then
     for b in $bins; do rm -f "$prefix/bin/$b"; done
     rm -f "$prefix/share/applications/mixercraft.desktop"
     for i in $icons; do rm -f "$prefix/share/icons/$i"; done
     rm -rf "$prefix/share/doc/mixercraft"
-    refresh
     echo "MixerCraft removed from $prefix."
     exit 0
 fi
@@ -56,7 +50,8 @@ cp "$here/share/doc/mixercraft/"* "$prefix/share/doc/mixercraft/"
 # Desktop sessions often do not have ~/.local/bin on PATH: use the full path.
 sed "s|^Exec=mixercraft-gui|Exec=\"$prefix/bin/mixercraft-gui\"|" \
     "$here/share/applications/mixercraft.desktop" > "$prefix/share/applications/mixercraft.desktop"
-refresh
+# No icon or desktop caches are written: desktops scan these folders, and a
+# cache in the user's folders would go stale when other programs add files.
 
 echo "MixerCraft installed to $prefix."
 case ":${PATH:-}:" in

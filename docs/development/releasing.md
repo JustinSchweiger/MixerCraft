@@ -1,9 +1,15 @@
-# Windows installer and releases
+# Installers and releases
 
 Decisions: [ADR 0006](../adr/0006-distribution-and-updates.md). Everything here
-is free tooling and runs without administrator rights.
+is free tooling; nothing is signed with a paid certificate.
 
-## Build the installer
+| Platform | Package | Built by | Updates |
+|---|---|---|---|
+| Windows x64 | per-user MSI + `latest.json` | `scripts/build-installer.ps1` (locally) | in-app: download, verify, install |
+| Linux x86_64 / ARM64 | `.deb`, portable `.tar.gz` | `scripts/package-linux.sh` (release workflow) | in-app check, links to the release page |
+| macOS (universal) | `.dmg` with `MixerCraft.app` (ad-hoc signed) | `scripts/package-macos.sh` (release workflow) | in-app check, links to the release page |
+
+## Windows: build the installer
 
 Needs the Rust MSVC toolchain and a .NET SDK (6 or newer). WiX Toolset 5.0.2
 is pinned in `.config/dotnet-tools.json` and restored by the script.
@@ -55,16 +61,89 @@ and timestamps. Compare releases by the programs inside, not the MSI hash.
 Unattended: `msiexec /i MixerCraft-0.2.0-x64.msi /passive` (all default
 features), `ADDLOCAL=Main,Autostart` to choose features, `/x` to uninstall.
 
+## Linux: build the packages
+
+On the target architecture (x86_64 or ARM64), with the build dependencies
+from [building.md](building.md) plus `dpkg-dev`:
+
+```bash
+scripts/package-linux.sh
+```
+
+Output in `target/packages/`:
+
+| File | Purpose |
+|---|---|
+| `mixercraft_<version>_<amd64\|arm64>.deb` | Debian/Ubuntu package: programs in `/usr/bin`, launcher, icons; dependencies from `dpkg-shlibdeps` |
+| `mixercraft-<version>-linux-<x86_64\|aarch64>.tar.gz` | portable archive; `./install.sh` installs to `~/.local` (no root), `--prefix DIR`, `--uninstall` |
+| `*.sha256` | checksums (`sha256sum -c`) |
+
+Options: `--version X.Y.Z`, `--feed <url>` (compiled-in update feed),
+`--skip-cargo`. Release packages are built on Ubuntu 22.04, so they run on
+distributions with glibc 2.35 or newer. There is no AppImage: autostart
+entries and the engine the app starts would point into the AppImage's
+temporary mount, which disappears when the app exits.
+
+The `.deb` and the archive do not register autostart; the app's Settings tab
+or `mixercraft autostart enable` does, per user. Remove that registration
+(`mixercraft autostart disable`) before uninstalling.
+
+## macOS: build the disk image
+
+With Xcode command-line tools and both Rust targets
+(`rustup target add aarch64-apple-darwin x86_64-apple-darwin`):
+
+```bash
+scripts/package-macos.sh            # universal (Apple silicon + Intel)
+scripts/package-macos.sh --native-only   # this Mac's architecture only, faster
+```
+
+Output: `target/packages/MixerCraft-<version>-macos-universal.dmg` and its
+`.sha256`. The bundle holds all three programs in `Contents/MacOS` (the app
+starts the engine next to itself; the CLI is
+`/Applications/MixerCraft.app/Contents/MacOS/mixercraft`). Its Info.plist and
+the engine's embedded Info.plist carry the microphone usage text, so macOS
+asks for microphone access instead of delivering silence.
+
+**Signing:** the bundle is only ad-hoc signed — there is no paid Apple
+Developer ID (zero recurring cost, ADR 0006), so it is not notarized.
+Gatekeeper blocks the first start of a downloaded copy: open it once, then
+**System Settings → Privacy & Security → "MixerCraft was blocked…" → Open
+Anyway** (macOS 15 removed the right-click → Open shortcut). Alternatively
+`xattr -dr com.apple.quarantine /Applications/MixerCraft.app`. Because the
+ad-hoc signature changes with every build, macOS may ask for microphone
+access again after an update.
+
+## Release workflow (Linux and macOS)
+
+`.github/workflows/release.yml` builds and smoke-tests the Linux packages
+(x86_64 and ARM64) and the macOS disk image: it installs and removes the
+`.deb`, runs `install.sh` into a temporary prefix, mounts the disk image,
+checks signatures, architectures and the embedded Info.plist, and runs the
+programs' `--version`. On pull requests that touch packaging it is a dry run
+(packages kept as workflow artifacts for 14 days). Started by hand (Actions →
+Release packages → Run workflow) with a release tag, it builds from that tag
+and attaches the packages to the existing GitHub release of that tag. It
+never runs on a push to `main`.
+
 ## Publish a release
 
 1. Bump `version` in the workspace `Cargo.toml`, update `CHANGELOG.md`.
-2. Build (the default `-Feed` is
+2. Build the Windows installer (the default `-Feed` is
    `https://github.com/JustinSchweiger/MixerCraft/releases/latest/download/latest.json`,
    ADR 0006), optionally with `-Notes "…" -NotesUrl https://github.com/JustinSchweiger/MixerCraft/releases/tag/v<version>`.
+   Without `-NotesUrl`, apps reading a GitHub feed link to
+   `…/releases/latest` instead.
 3. On GitHub, draft a release with tag `v<version>`, attach the `.msi`,
-   `.msi.sha256` and `latest.json`, and publish it as the latest release.
-   Clients follow `releases/latest`, so a release only reaches them once it is
-   published (drafts and pre-releases are invisible to them).
+   `.msi.sha256` and `latest.json`.
+4. Run the **Release packages** workflow with the tag `v<version>`; it
+   attaches the `.deb`, `.tar.gz` and `.dmg` files (and their `.sha256`) to
+   the draft.
+5. Publish the release as the latest release. Clients follow
+   `releases/latest`, so a release only reaches them once it is published
+   (drafts and pre-releases are invisible to them). `latest.json` only lists
+   the MSI: Linux and macOS apps show the new version and link to the release
+   page (notify only, ADR 0006).
 
 ## Test the updater with a local feed
 

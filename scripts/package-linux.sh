@@ -95,7 +95,9 @@ License: MIT or Apache-2.0
  See /usr/share/doc/mixercraft/LICENSE-MIT and LICENSE-APACHE.
 EOF
 
-# Shared-library dependencies of the binaries, as Debian package names.
+# Shared-library dependencies of the binaries, as Debian package names. The
+# window system libraries (xkbcommon, Wayland, X11) are loaded at run time
+# by winit, so they are listed by hand in the control file.
 shlib_dir="$work/shlibdeps"
 mkdir -p "$shlib_dir/debian"
 printf 'Source: mixercraft\n\nPackage: mixercraft\nArchitecture: any\n' > "$shlib_dir/debian/control"
@@ -110,8 +112,8 @@ Version: $version
 Architecture: $deb_arch
 Maintainer: MixerCraft contributors <https://github.com/JustinSchweiger/MixerCraft/issues>
 Installed-Size: $installed_kb
-Depends: $depends
-Recommends: pipewire-alsa | pulseaudio
+Depends: $depends, libxkbcommon0
+Recommends: pipewire-alsa | pulseaudio, libwayland-client0, libxkbcommon-x11-0
 Section: sound
 Priority: optional
 Homepage: https://github.com/JustinSchweiger/MixerCraft
