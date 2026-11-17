@@ -13,6 +13,22 @@ All notable changes to this project are documented here. The format follows
   running as before.
 
 ### Added
+- Linux tray icon (StatusNotifierItem via `ksni`, no GTK): the same menu as on
+  Windows and macOS (open, mute per input, start/stop engine, quit), close to
+  tray and `--tray`. Desktops without a tray host (plain GNOME) keep the
+  previous behaviour (closing quits). `deny.toml` now allows the Unlicense
+  (ksni's public-domain dedication).
+- "Open MixerCraft when you sign in" on the Settings tab (and `mixercraft
+  autostart enable --app`) now works on Linux (XDG autostart entry) and macOS
+  (a second LaunchAgent, `org.mixercraft.app`, used from the next sign-in).
+- Linux virtual devices: "New virtual playback device" on an input and "New
+  virtual recording device" on an output create PipeWire nodes ("MixerCraft
+  <name>", `mixercraft.sink.<name>` / `mixercraft.source.<name>`) that other
+  applications play into or record from. They need no driver, edit no
+  configuration and disappear with the engine; a PipeWire restart reopens
+  them. Tested against PipeWire without audio hardware (WSL2 and a new CI job,
+  `scripts/test-pipewire-virtual.sh`), not yet on a desktop with sound
+  hardware. Decision: ADR 0009.
 - Linux and macOS packages (preview, tested in CI only): a `.deb` and a
   portable `.tar.gz` with a per-user `install.sh` for Linux x86_64 and ARM64
   (`scripts/package-linux.sh`), and a universal, ad-hoc signed `.dmg` for
@@ -47,6 +63,22 @@ First release: Windows installer on
 [GitHub Releases](https://github.com/JustinSchweiger/MixerCraft/releases/tag/v0.1.0).
 
 ### Added
+- Linux tray icon (StatusNotifierItem via `ksni`, no GTK): the same menu as on
+  Windows and macOS (open, mute per input, start/stop engine, quit), close to
+  tray and `--tray`. Desktops without a tray host (plain GNOME) keep the
+  previous behaviour (closing quits). `deny.toml` now allows the Unlicense
+  (ksni's public-domain dedication).
+- "Open MixerCraft when you sign in" on the Settings tab (and `mixercraft
+  autostart enable --app`) now works on Linux (XDG autostart entry) and macOS
+  (a second LaunchAgent, `org.mixercraft.app`, used from the next sign-in).
+- Linux virtual devices: "New virtual playback device" on an input and "New
+  virtual recording device" on an output create PipeWire nodes ("MixerCraft
+  <name>", `mixercraft.sink.<name>` / `mixercraft.source.<name>`) that other
+  applications play into or record from. They need no driver, edit no
+  configuration and disappear with the engine; a PipeWire restart reopens
+  them. Tested against PipeWire without audio hardware (WSL2 and a new CI job,
+  `scripts/test-pipewire-virtual.sh`), not yet on a desktop with sound
+  hardware. Decision: ADR 0009.
 - Settings tab in the desktop app:
   - Startup (Windows): open MixerCraft hidden in the tray when you sign in
     (a second Task Scheduler task, "MixerCraft", running the app with
@@ -131,6 +163,22 @@ First release: Windows installer on
   longer causes a seconds-long pitch correction.
 
 ### Added
+- Linux tray icon (StatusNotifierItem via `ksni`, no GTK): the same menu as on
+  Windows and macOS (open, mute per input, start/stop engine, quit), close to
+  tray and `--tray`. Desktops without a tray host (plain GNOME) keep the
+  previous behaviour (closing quits). `deny.toml` now allows the Unlicense
+  (ksni's public-domain dedication).
+- "Open MixerCraft when you sign in" on the Settings tab (and `mixercraft
+  autostart enable --app`) now works on Linux (XDG autostart entry) and macOS
+  (a second LaunchAgent, `org.mixercraft.app`, used from the next sign-in).
+- Linux virtual devices: "New virtual playback device" on an input and "New
+  virtual recording device" on an output create PipeWire nodes ("MixerCraft
+  <name>", `mixercraft.sink.<name>` / `mixercraft.source.<name>`) that other
+  applications play into or record from. They need no driver, edit no
+  configuration and disappear with the engine; a PipeWire restart reopens
+  them. Tested against PipeWire without audio hardware (WSL2 and a new CI job,
+  `scripts/test-pipewire-virtual.sh`), not yet on a desktop with sound
+  hardware. Decision: ADR 0009.
 - The MixerCraft icon on the Windows executables (`mixercraft-gui.exe`,
   `mixercraftd.exe`, `mixercraft.exe`) for Explorer, the taskbar, Alt-Tab
   and Task Manager, plus version information (product "MixerCraft",

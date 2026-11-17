@@ -127,7 +127,13 @@ fn virtual_endpoints() -> (Support, &'static str) {
 }
 #[cfg(target_os = "linux")]
 fn virtual_endpoints() -> (Support, &'static str) {
-    (Support::Planned, "PipeWire null-audio-sink nodes; no driver needed")
+    match crate::virtual_dev::unavailable_reason() {
+        None => (
+            Support::Partial,
+            "PipeWire sink/source nodes owned by the engine; tested against PipeWire without audio hardware only",
+        ),
+        Some(_) => (Support::Unsupported, "Virtual devices need PipeWire running in this session"),
+    }
 }
 #[cfg(target_os = "macos")]
 fn virtual_endpoints() -> (Support, &'static str) {

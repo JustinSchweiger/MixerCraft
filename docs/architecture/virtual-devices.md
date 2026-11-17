@@ -71,17 +71,34 @@ Chosen because it costs nothing and needs no kernel code of our own
 A native WaveRT driver (lower latency) remains possible later if signing is
 arranged (OSSign or an EV certificate).
 
-## Linux
+## Linux (implemented: PipeWire stream nodes)
 
-* Runtime-created `support.null-audio-sink` adapter nodes with
-  `object.linger = true` and recognisable `node.name`s
-  (`mixercraft.virtual.<id>`), created through the PipeWire core API from the
-  engine's native PipeWire integration.
-* Ownership is tracked by node name so the engine can reconcile on start
-  (create missing nodes, keep existing ones, remove nodes no longer
-  configured) without touching anything it did not create.
-* Uninstall removes the nodes; no configuration files of the user or the
-  distribution are edited.
+Decision and alternatives: [ADR 0009](../adr/0009-linux-virtual-devices.md).
+
+* `mixercraft-platform`'s `pipewire_dev` gives every virtual device its own
+  native PipeWire stream whose `media.class` makes it a device: a strip with
+  source `virtual:<name>` gets an `Audio/Sink` node "MixerCraft <name>"
+  (`node.name = mixercraft.sink.<slug>`) that applications play into; a bus
+  with sink `virtual:<name>` gets an `Audio/Source` node
+  (`mixercraft.source.<slug>`) that applications record from. Desktop mixers
+  (pavucontrol, GNOME and KDE sound settings, `wpctl`) list them like any
+  other device; `pw-play --target mixercraft.sink.game` plays into one.
+* F32LE stereo at 48 kHz; PipeWire converts for applications. The nodes
+  follow the graph's driver (the sound card, or PipeWire's dummy driver),
+  and the engine's drift-compensated FIFOs bridge to its own clock like for
+  any device. `node.always-process` keeps them scheduled while no
+  application is connected. A virtual device never clocks the engine.
+* The nodes exist while the engine's streams are open and vanish with them,
+  also on a crash: there is nothing to reconcile and nothing left after
+  uninstalling; no configuration of the user or the distribution is edited.
+  WirePlumber remembers application routing by `node.name`.
+* A PipeWire restart is reported as a device fault; the engine's recovery
+  reopens the nodes (measured: 0.5 s).
+* Needs a running PipeWire (0.3.49+); without it the capability model
+  reports virtual devices as unsupported. A rename of the strip or bus
+  reaches the node description when the device next opens.
+* Test: `scripts/test-pipewire-virtual.sh` (also a CI job) plays a tone into
+  the sink node and records it from the source node.
 
 ## macOS (planned)
 
@@ -105,4 +122,6 @@ Proposal and plan: [ADR 0010](../adr/0010-macos-virtual-devices.md).
 ## Status
 
 Windows: implemented (emulated USB devices via usbip-win2), verified on
-hardware 2026-11-16. Linux and macOS: planned.
+hardware 2026-11-16. Linux: implemented (PipeWire stream nodes, 2026-11-17),
+tested against PipeWire without audio hardware (WSL2, CI), not yet on a
+desktop with sound hardware. macOS: planned.

@@ -18,6 +18,12 @@ thiserror.workspace = true
 [lints]
 workspace = true
 
+# Virtual devices on Linux are PipeWire nodes (needs libpipewire-0.3-dev and
+# libclang at build time, PipeWire 0.3.49+ at run time).
+[target.'cfg(target_os = "linux")'.dependencies]
+pipewire = { version = "0.10.1", features = ["v0_3_49"] }
+audio_thread_priority.workspace = true
+
 [features]
 # Native PipeWire host for cpal on Linux (needs libpipewire-0.3-dev and
 # libclang at build time). Without it, Linux uses ALSA, which on PipeWire
