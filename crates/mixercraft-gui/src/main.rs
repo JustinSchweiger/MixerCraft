@@ -3,9 +3,10 @@
 //! A thin client: all audio runs in `mixercraftd`. The window can be closed,
 //! crash or restart at any time without affecting audio.
 //!
-//! On Windows and macOS the app lives in the system tray: closing the window
-//! hides it (unless the Settings tab says to quit), and a second launch shows
-//! the running instance. `--tray` starts hidden (for sign-in).
+//! The app lives in the system tray (Windows, macOS, and Linux desktops with a
+//! StatusNotifier host): closing the window hides it (unless the Settings tab
+//! says to quit), and a second launch shows the running instance. `--tray`
+//! starts hidden (for sign-in).
 
 // No console window for the GUI on Windows (release builds).
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
@@ -16,6 +17,9 @@ mod fx_law;
 mod meters;
 mod settings;
 #[cfg(any(windows, target_os = "macos"))]
+mod tray;
+#[cfg(target_os = "linux")]
+#[path = "tray_linux.rs"]
 mod tray;
 mod update;
 
@@ -77,7 +81,7 @@ thread_local! {
     /// When the title bar was last pressed (a second press soon after
     /// toggles maximise).
     static LAST_TITLE_PRESS: RefCell<Option<Instant>> = const { RefCell::new(None) };
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     static TRAY: RefCell<Option<tray::Tray>> = const { RefCell::new(None) };
     /// App preferences and the file they are saved to.
     static GUI_SETTINGS: RefCell<(Option<PathBuf>, settings::GuiSettings)> = RefCell::new((None, settings::GuiSettings::default()));
@@ -95,11 +99,11 @@ fn hides_to_tray() -> bool {
 
 /// Whether a tray icon exists (closing the window then only hides it).
 fn has_tray() -> bool {
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     {
         TRAY.with(|t| t.borrow().is_some())
     }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
         false
     }
@@ -107,14 +111,14 @@ fn has_tray() -> bool {
 
 /// Mirrors strip mutes, connection and status into the tray.
 fn update_tray(ui: &MainWindow) {
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     TRAY.with(|t| {
         if let Some(tray) = t.borrow_mut().as_mut() {
             let strips: Vec<(String, bool)> = ui.get_strips().iter().map(|s| (s.name.to_string(), s.mute)).collect();
             tray.update(&strips, ui.get_connected(), &format!("MixerCraft — {}", ui.get_status_text()));
         }
     });
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     let _ = ui;
 }
 
@@ -876,7 +880,7 @@ fn main() -> Result<(), slint::PlatformError> {
     GUI_SETTINGS.with(|g| *g.borrow_mut() = (settings_path, gui));
     let mut st = SettingsState {
         autostart_supported: mixercraft_platform::autostart::app_supported(),
-        has_tray: cfg!(any(windows, target_os = "macos")),
+        has_tray: cfg!(any(windows, target_os = "macos", target_os = "linux")),
         close_to_tray: gui.close_to_tray,
         peak_hold: gui.peak_hold,
         sample_rate_index: 1,
@@ -1121,9 +1125,9 @@ fn main() -> Result<(), slint::PlatformError> {
             .expect("spawn instance listener");
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     install_tray(&ui, tx);
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     drop(tx);
 
     let w = ui.as_weak();
@@ -1153,7 +1157,7 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     restore_geometry(&ui);
-    if !(start_hidden && cfg!(any(windows, target_os = "macos"))) {
+    if !(start_hidden && cfg!(any(windows, target_os = "macos", target_os = "linux"))) {
         ui.show()?;
         schedule_placement(&ui);
     }
@@ -1297,24 +1301,63 @@ fn install_window_actions(ui: &MainWindow) {
     std::mem::forget(timer);
 }
 
+/// Carries out a tray menu choice on the UI thread.
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+fn tray_act(ui: &MainWindow, action: tray::Action, tx: &mpsc::Sender<Cmd>) {
+    match action {
+        tray::Action::Show => show_window(ui),
+        tray::Action::ToggleMute(i) => ui.invoke_strip_mute(i as i32),
+        tray::Action::ToggleEngine => {
+            let _ = tx.send(if ui.get_connected() { Cmd::StopEngine } else { Cmd::StartEngine });
+        }
+        tray::Action::Quit => {
+            let _ = slint::quit_event_loop();
+        }
+    }
+}
+
+/// Without a tray, closing the window must quit and the window must be
+/// visible.
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+fn no_tray(ui: &MainWindow, why: &str) {
+    eprintln!("no tray icon: {why}");
+    let mut st = ui.get_settings();
+    st.has_tray = false;
+    ui.set_settings(st);
+    show_window(ui);
+}
+
+/// Creates the StatusNotifier tray icon once the event loop runs; its menu
+/// clicks arrive on the tray's D-Bus thread and are passed to the UI thread.
+#[cfg(target_os = "linux")]
+fn install_tray(ui: &MainWindow, tx: mpsc::Sender<Cmd>) {
+    let w = ui.as_weak();
+    slint::Timer::single_shot(std::time::Duration::ZERO, move || {
+        let target = w.clone();
+        let on_action = move |action: tray::Action| {
+            let (w, tx) = (target.clone(), tx.clone());
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = w.upgrade() {
+                    tray_act(&ui, action, &tx);
+                }
+            });
+        };
+        let Some(ui) = w.upgrade() else { return };
+        match tray::Tray::new(on_action) {
+            Ok(tray) => {
+                TRAY.with(|t| *t.borrow_mut() = Some(tray));
+                update_tray(&ui);
+            }
+            Err(e) => no_tray(&ui, &e),
+        }
+    });
+}
+
 /// Creates the tray once the event loop runs and routes its events.
 #[cfg(any(windows, target_os = "macos"))]
 fn install_tray(ui: &MainWindow, tx: mpsc::Sender<Cmd>) {
     use tray_icon::menu::MenuEvent;
     use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
-
-    fn act(ui: &MainWindow, action: tray::Action, tx: &mpsc::Sender<Cmd>) {
-        match action {
-            tray::Action::Show => show_window(ui),
-            tray::Action::ToggleMute(i) => ui.invoke_strip_mute(i as i32),
-            tray::Action::ToggleEngine => {
-                let _ = tx.send(if ui.get_connected() { Cmd::StopEngine } else { Cmd::StartEngine });
-            }
-            tray::Action::Quit => {
-                let _ = slint::quit_event_loop();
-            }
-        }
-    }
 
     let w = ui.as_weak();
     let menu_tx = tx.clone();
@@ -1324,7 +1367,7 @@ fn install_tray(ui: &MainWindow, tx: mpsc::Sender<Cmd>) {
             let Some(ui) = w.upgrade() else { return };
             let action = TRAY.with(|t| t.borrow().as_ref().and_then(|t| t.action_for(&event.id)));
             if let Some(action) = action {
-                act(&ui, action, &tx);
+                tray_act(&ui, action, &tx);
             }
         });
     }));
@@ -1354,14 +1397,8 @@ fn install_tray(ui: &MainWindow, tx: mpsc::Sender<Cmd>) {
             }
         }
         Err(e) => {
-            // Without a tray, closing the window must quit and the window
-            // must be visible.
-            eprintln!("no tray icon: {e}");
             if let Some(ui) = w.upgrade() {
-                let mut st = ui.get_settings();
-                st.has_tray = false;
-                ui.set_settings(st);
-                show_window(&ui);
+                no_tray(&ui, &e);
             }
         }
     });
