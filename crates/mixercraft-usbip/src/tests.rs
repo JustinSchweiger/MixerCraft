@@ -249,6 +249,22 @@ fn dropping_the_handle_unplugs_the_device() {
 }
 
 #[test]
+fn streaming_decision_follows_the_explicit_stop_and_the_timeouts() {
+    let ms = |n: u64| n * 1_000_000;
+    let t = ms(1_000);
+    // Speaker: streaming right after a packet, not after IDLE_AFTER without one.
+    assert!(host_moves_audio(Direction::Speaker, true, t, 0, t + ms(1)));
+    assert!(!host_moves_audio(Direction::Speaker, true, t, 0, t + IDLE_AFTER.as_nanos() as u64));
+    // An explicit stop hands over at once, even right after a packet.
+    assert!(!host_moves_audio(Direction::Speaker, false, t, 0, t));
+    assert!(!host_moves_audio(Direction::Microphone, false, t, t, t));
+    // Microphone: the host owns the clock from its first submission, before
+    // any packet completed, until MIC_IDLE_AFTER without transfers.
+    assert!(host_moves_audio(Direction::Microphone, true, 0, t, t + ms(5)));
+    assert!(!host_moves_audio(Direction::Microphone, true, 0, t, t + MIC_IDLE_AFTER.as_nanos() as u64));
+}
+
+#[test]
 fn explicit_stop_hands_over_to_the_idle_clock_at_once() {
     let srv = server();
     let log = Arc::new(Mutex::new(Log::default()));
@@ -260,34 +276,19 @@ fn explicit_stop_hands_over_to_the_idle_clock_at_once() {
     c.submit(1, false, data.len() as u32, [0; 8], &data, Some(&packets));
     c.ret();
     c.read(10 * 16);
-    // The host counts as streaming for IDLE_AFTER (4 ms) after its last
-    // packet; the explicit stop below must end that earlier. A runner that
-    // stalls for longer than that window cannot show the difference, so the
-    // check is skipped there instead of failing at random.
-    let done = Instant::now();
-    let timeout_at = done + IDLE_AFTER;
-    while !h.host_streaming() && Instant::now() + Duration::from_millis(2) < timeout_at {
-        std::thread::yield_now();
-    }
-    if !h.host_streaming() {
-        eprintln!("skipped: streaming state not observed within the {IDLE_AFTER:?} window");
-        return;
-    }
-    // SET_INTERFACE 1, alternate setting 0: the host stops streaming.
+    assert!(h.device.host_active.load(Ordering::Relaxed), "host streams after a transfer");
+    // SET_INTERFACE 1, alternate setting 0: the host stops streaming. The
+    // server applies it before answering, so this needs no timing: the
+    // decision itself is covered by the test above.
     c.submit(0, false, 0, [0x01, 11, 0, 0, 1, 0, 0, 0], &[], None);
     c.ret();
-    let acked = Instant::now();
-    let limit = acked + Duration::from_millis(50);
+    assert!(!h.device.host_active.load(Ordering::Relaxed), "explicit stop recorded before the reply");
+    // And the idle clock does take over (generous bound for slow CI runners).
+    let limit = Instant::now() + Duration::from_millis(200);
     while h.host_streaming() && Instant::now() < limit {
-        std::thread::yield_now();
+        std::thread::sleep(Duration::from_millis(1));
     }
-    let handed_over = Instant::now();
     assert!(!h.host_streaming(), "idle clock takes over");
-    if acked + Duration::from_micros(1500) <= timeout_at {
-        assert!(handed_over < timeout_at, "idle clock waited for the timeout instead of the explicit stop");
-    } else {
-        eprintln!("skipped: the stop arrived too close to the {IDLE_AFTER:?} timeout to tell them apart");
-    }
 }
 
 #[test]
