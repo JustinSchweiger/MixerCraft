@@ -25,25 +25,29 @@
 //! way renaming in the Sound settings does.
 //!
 //! Windows must remove a device's old copy before it can detect the device
-//! again. When the PC went to sleep while that was under way (the engine
-//! reconnected half a second after Windows dropped the devices), Windows
-//! kept the old copies for good: every application got "device
-//! invalidated" until Windows was restarted (seen on hardware). So the
-//! worker connects nothing while the system sleeps, waits until an old copy
-//! is gone before connecting a device, and checks that Windows really
-//! detected it again; otherwise it reports the device as failed with a
-//! message that says what to do.
+//! again. When the user shut down (which Fast Startup turns into a
+//! hibernation of Windows itself), Windows dropped the devices while the
+//! engine was still running, the engine reconnected them half a second
+//! later, and Windows saved its state with copies it never removed: after
+//! the next start every application got "device invalidated" until a real
+//! restart (seen twice on hardware). So when the session ends (sign-out,
+//! shutdown) the engine unplugs its devices itself, waits until Windows has
+//! removed them, and connects nothing any more; it also connects nothing
+//! while the system sleeps. The worker waits until an old copy is gone
+//! before connecting a device and checks that Windows really detected it
+//! again; otherwise it reports the device as failed with a message that
+//! says what to do.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
 use mixercraft_usbip::{AudioPort, DeviceHandle, DeviceSpec, DeviceWatch, Direction, Server, descriptors};
-use mixercraft_winaudio::{DeviceState, PowerEvent, PowerWatch};
+use mixercraft_winaudio::{DeviceState, PowerEvent, PowerWatch, SessionEvent, SessionWatch};
 
 use crate::{DeviceSelector, FaultKind, PlatformError, StreamFault, StreamInfo};
 
@@ -152,12 +156,14 @@ struct Job {
 /// The USB/IP server and the worker that connects devices to Windows.
 #[cfg_attr(target_os = "linux", allow(dead_code))] // Linux uses PipeWire nodes
 pub(crate) struct Virtual {
-    server: Server,
+    server: Arc<Server>,
     jobs: Sender<Job>,
     labels: Labels,
     labels_changed: Arc<AtomicBool>,
     /// Sleep notifications (none if Windows refused them).
     _power: Option<PowerWatch>,
+    /// Sign-out and shutdown notifications (none if unavailable).
+    _session: Option<SessionWatch>,
 }
 
 impl fmt::Debug for Virtual {
@@ -173,8 +179,10 @@ impl Virtual {
             return Err(why.into());
         }
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port()));
-        let server = Server::start(addr)
-            .map_err(|e| format!("cannot start the USB/IP server on {addr} (another USB/IP server running?): {e}"))?;
+        let server =
+            Arc::new(Server::start(addr).map_err(|e| {
+                format!("cannot start the USB/IP server on {addr} (another USB/IP server running?): {e}")
+            })?);
         let (jobs, rx) = mpsc::channel();
         let labels: Labels = Arc::default();
         let labels_changed = Arc::new(AtomicBool::new(false));
@@ -188,13 +196,14 @@ impl Virtual {
             };
         })
         .ok();
+        let session = watch_session(Arc::clone(&power), Arc::downgrade(&server));
         std::thread::Builder::new()
             .name("mixercraft-virtual-attach".into())
             .spawn(move || {
                 attach_worker(&rx, &worker_labels, &worker_changed, DefaultMemory::load(memory_file), &power);
             })
             .map_err(|e| e.to_string())?;
-        Ok(Self { server, jobs, labels, labels_changed, _power: watch })
+        Ok(Self { server, jobs, labels, labels_changed, _power: watch, _session: session })
     }
 
     /// Sets the name Windows shows for a virtual device (speaker: a strip's
@@ -233,6 +242,37 @@ impl Virtual {
         E: FnMut(StreamFault) + Send + 'static,
     {
         self.add(name, Direction::Microphone, Box::new(Microphone(on_data)), Box::new(on_error))
+    }
+}
+
+/// Longest wait at sign-out or shutdown for Windows to remove the devices
+/// (Windows waits about 5 s for an application before ending it).
+const SESSION_END_WAIT: Duration = Duration::from_secs(4);
+
+/// When the user session ends, stops connecting devices and unplugs them,
+/// so Windows does not save (Fast Startup) or leave behind copies it has
+/// not finished removing.
+fn watch_session(power: Arc<Mutex<PowerState>>, server: Weak<Server>) -> Option<SessionWatch> {
+    let set = move |s| *power.lock().unwrap_or_else(PoisonError::into_inner) = s;
+    mixercraft_winaudio::watch_session_end(move |event| match event {
+        SessionEvent::Ending => set(PowerState::Ending),
+        SessionEvent::Cancelled => set(PowerState::Awake),
+        SessionEvent::Ended => {
+            set(PowerState::Ending);
+            if let Some(server) = server.upgrade() {
+                let serials = server.unplug_all();
+                wait_until_removed(&serials, SESSION_END_WAIT);
+            }
+        }
+    })
+    .ok()
+}
+
+/// Waits until Windows no longer has any of these devices plugged in.
+fn wait_until_removed(serials: &[String], limit: Duration) {
+    let until = Instant::now() + limit;
+    while Instant::now() < until && serials.iter().any(|s| windows_state(s).is_some_and(|d| d.present)) {
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -344,6 +384,8 @@ enum PowerState {
     Suspended,
     /// The system woke at this moment.
     Resumed(Instant),
+    /// The user session ends (sign-out, shutdown).
+    Ending,
 }
 
 /// After waking up, Windows first brings back its own USB and audio
@@ -354,17 +396,17 @@ const OLD_COPY_TIMEOUT: Duration = Duration::from_secs(20);
 /// Clock tolerance when comparing Windows' arrival time with ours.
 const ARRIVAL_SLACK: Duration = Duration::from_secs(2);
 
-const OLD_COPY_STUCK: &str = "Windows still holds an earlier copy of this virtual device (this can happen \
-when the PC goes to sleep while the device reconnects). MixerCraft keeps trying; if the device does not \
-come back within a few minutes, restart Windows.";
-const NOT_RENEWED: &str = "Windows did not set up this virtual device again and still uses an earlier copy \
-(this can happen around sleep). MixerCraft keeps trying; if the device does not come back within a few \
-minutes, restart Windows.";
+const OLD_COPY_STUCK: &str = "Windows still holds an earlier copy of this virtual device, so applications \
+cannot use it (this can happen after shutting down with Fast Startup, or around sleep). Restart Windows \
+(Restart, not Shut down) to fix it; MixerCraft keeps trying meanwhile.";
+const NOT_RENEWED: &str = "Windows did not set up this virtual device again and still uses an earlier copy, so \
+applications cannot use it (this can happen after shutting down with Fast Startup, or around sleep). \
+Restart Windows (Restart, not Shut down) to fix it; MixerCraft keeps trying meanwhile.";
 
 fn attach_allowed(state: PowerState, now: Instant) -> bool {
     match state {
         PowerState::Awake => true,
-        PowerState::Suspended => false,
+        PowerState::Suspended | PowerState::Ending => false,
         PowerState::Resumed(at) => now.saturating_duration_since(at) >= RESUME_SETTLE,
     }
 }
@@ -690,6 +732,16 @@ mod tests {
         assert!(!attach_allowed(PowerState::Suspended, now));
         assert!(!attach_allowed(PowerState::Resumed(now), now + Duration::from_secs(1)));
         assert!(attach_allowed(PowerState::Resumed(now), now + RESUME_SETTLE));
+        // Sign-out or shutdown: never again in this session.
+        assert!(!attach_allowed(PowerState::Ending, now + Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn waiting_for_removal_ends() {
+        // Unknown devices are not plugged in: no wait.
+        let t = Instant::now();
+        wait_until_removed(&["MCNOSUCHDEVICE".into()], Duration::from_secs(5));
+        assert!(t.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

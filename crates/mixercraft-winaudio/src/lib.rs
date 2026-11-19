@@ -39,7 +39,10 @@
 use std::fmt;
 
 mod system;
-pub use system::{DeviceState, PowerEvent, PowerWatch, device_state, filetime_to_system_time, watch_power};
+pub use system::{
+    DeviceState, PowerEvent, PowerWatch, SessionEvent, SessionWatch, device_state, filetime_to_system_time,
+    watch_power, watch_session_end,
+};
 
 /// Errors from the Windows APIs.
 #[derive(Debug, Clone, PartialEq, Eq)]

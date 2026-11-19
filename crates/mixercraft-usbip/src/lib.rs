@@ -203,6 +203,23 @@ impl Server {
     }
 }
 
+impl Server {
+    /// Disconnects every client, so Windows sees the devices unplugged, and
+    /// returns the serial numbers of all devices. The devices stay offered
+    /// and can be imported again.
+    #[must_use]
+    pub fn unplug_all(&self) -> Vec<String> {
+        let mut serials = Vec::new();
+        for d in self.inner.snapshot() {
+            if let Some(conn) = d.conn.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+                let _ = conn.shutdown(std::net::Shutdown::Both);
+            }
+            serials.push(d.spec.serial.clone());
+        }
+        serials
+    }
+}
+
 impl Drop for Server {
     fn drop(&mut self) {
         self.inner.stop.store(true, Ordering::Relaxed);

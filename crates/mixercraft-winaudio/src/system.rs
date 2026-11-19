@@ -1,12 +1,14 @@
-//! Plug-and-play device state and power (sleep) notifications.
+//! Plug-and-play device state, power (sleep) and session-end notifications.
 //!
 //! MixerCraft's virtual devices are USB devices that Windows must remove and
-//! detect again whenever the engine reconnects them. If the system goes to
-//! sleep in the middle of that, Windows can keep the old copy forever (seen
-//! on hardware: every application then got "device invalidated" until
-//! Windows was restarted). The engine uses [`device_state`] to wait until an
-//! old copy is gone and to confirm that a new one arrived, and
-//! [`watch_power`] to connect nothing while the system suspends.
+//! detect again whenever the engine reconnects them. If Windows saves its
+//! state in the middle of that (shutting down with Fast Startup, or going to
+//! sleep), it can keep the old copy until the next real restart (seen on
+//! hardware: every application then got "device invalidated"). The engine
+//! uses [`device_state`] to wait until an old copy is gone and to confirm
+//! that a new one arrived, [`watch_session_end`] to unplug its devices
+//! cleanly before the user session ends, and [`watch_power`] to connect
+//! nothing while the system suspends.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -64,6 +66,44 @@ pub fn watch_power(on_event: impl Fn(PowerEvent) + Send + Sync + 'static) -> Res
     imp::register(Box::new(on_event)).map(|r| PowerWatch { _registration: r })
 }
 
+/// The user session (sign-out, shutdown, restart) is ending.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionEvent {
+    /// Windows asks whether the session may end (`WM_QUERYENDSESSION`).
+    Ending,
+    /// Another application refused; the session goes on.
+    Cancelled,
+    /// The session ends (`WM_ENDSESSION`). The process may be terminated as
+    /// soon as the callback returns; Windows waits for it a few seconds.
+    Ended,
+}
+
+/// Delivers [`SessionEvent`]s until dropped (see [`watch_session_end`]).
+pub struct SessionWatch {
+    /// Closes the window on drop.
+    _window: imp::SessionWindow,
+}
+
+impl std::fmt::Debug for SessionWatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionWatch").finish_non_exhaustive()
+    }
+}
+
+/// Calls `on_event` when the user session ends (sign-out, shutdown, also
+/// the shutdown that Fast Startup turns into hibernation).
+///
+/// Windows tells only processes with a top-level window; others (the engine
+/// has no window) are terminated without notice. This creates a hidden
+/// window on its own thread. The callback runs on that thread; for
+/// [`SessionEvent::Ended`] it may take a few seconds to clean up.
+///
+/// # Errors
+/// If the window cannot be created, or [`Error::Unsupported`] off Windows.
+pub fn watch_session_end(on_event: impl Fn(SessionEvent) + Send + Sync + 'static) -> Result<SessionWatch, Error> {
+    imp::session_window(Box::new(on_event)).map(|w| SessionWatch { _window: w })
+}
+
 /// Converts a Windows `FILETIME` (100 ns ticks since 1601) to a time.
 #[must_use]
 pub fn filetime_to_system_time(ticks: u64) -> Option<SystemTime> {
@@ -74,6 +114,7 @@ pub fn filetime_to_system_time(ticks: u64) -> Option<SystemTime> {
 }
 
 type OnEvent = Box<dyn Fn(PowerEvent) + Send + Sync>;
+type OnSession = Box<dyn Fn(SessionEvent) + Send + Sync>;
 
 #[cfg(windows)]
 mod imp {
@@ -191,13 +232,157 @@ mod imp {
             let _ = unsafe { PowerUnregisterSuspendResumeNotification(HPOWERNOTIFY(self.handle)) };
         }
     }
+
+    pub(super) use session::{SessionWindow, session_window};
+
+    #[cfg(test)]
+    pub(super) fn session_class() -> windows_core::PCWSTR {
+        session::CLASS
+    }
+
+    mod session {
+        use super::super::{Error, OnSession, SessionEvent};
+        use std::ffi::c_void;
+        use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows::Win32::System::Threading::GetCurrentThreadId;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DispatchMessageW, GWLP_USERDATA, GetMessageW,
+            GetWindowLongPtrW, MSG, PostThreadMessageW, RegisterClassW, SetWindowLongPtrW, WINDOW_EX_STYLE,
+            WM_ENDSESSION, WM_NCCREATE, WM_QUERYENDSESSION, WM_QUIT, WNDCLASSW, WS_OVERLAPPED,
+        };
+        use windows_core::w;
+
+        /// The window class; registered once per process.
+        pub(super) const CLASS: windows_core::PCWSTR = w!("MixerCraftSessionWatch");
+
+        /// Ends the window's thread on drop.
+        pub(crate) struct SessionWindow {
+            thread_id: u32,
+        }
+
+        impl Drop for SessionWindow {
+            fn drop(&mut self) {
+                // SAFETY: plain message post to a thread id; harmless if the
+                // thread has already ended.
+                let _ = unsafe { PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) };
+            }
+        }
+
+        unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+            if msg == WM_NCCREATE {
+                // SAFETY: for WM_NCCREATE, `lparam` points at the
+                // CREATESTRUCTW whose `lpCreateParams` is the leaked
+                // `OnSession` passed to CreateWindowExW.
+                let create = unsafe { &*(lparam.0 as *const CREATESTRUCTW) };
+                // SAFETY: `hwnd` is the window being created.
+                unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize) };
+            }
+            let event = match msg {
+                WM_QUERYENDSESSION => Some(SessionEvent::Ending),
+                WM_ENDSESSION if wparam.0 != 0 => Some(SessionEvent::Ended),
+                WM_ENDSESSION => Some(SessionEvent::Cancelled),
+                _ => None,
+            };
+            if let Some(event) = event {
+                // SAFETY: GWLP_USERDATA holds the leaked `OnSession` (set at
+                // WM_NCCREATE, never freed) or 0 before that.
+                let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const OnSession;
+                if !ptr.is_null() {
+                    // SAFETY: see above; the closure lives forever.
+                    let on_event = unsafe { &*ptr };
+                    // A panic must not unwind into Windows.
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| on_event(event)));
+                }
+                // TRUE for WM_QUERYENDSESSION: never block the session end.
+                return LRESULT(isize::from(msg == WM_QUERYENDSESSION));
+            }
+            // SAFETY: default handling with the arguments Windows gave us.
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+
+        pub(crate) fn session_window(on_event: OnSession) -> Result<SessionWindow, Error> {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::Builder::new()
+                .name("mixercraft-session-watch".into())
+                .spawn(move || {
+                    // Leaked: the window procedure may use it until the
+                    // process ends.
+                    let on_event: &'static OnSession = Box::leak(Box::new(on_event));
+                    match create(on_event) {
+                        Ok(()) => {
+                            // SAFETY: no preconditions.
+                            let _ = tx.send(Ok(unsafe { GetCurrentThreadId() }));
+                            pump();
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Err(e));
+                        }
+                    }
+                })
+                .map_err(|e| Error::Com(format!("cannot start the session watch thread: {e}")))?;
+            let thread_id = rx.recv().map_err(|_| Error::Com("session watch thread ended".into()))??;
+            Ok(SessionWindow { thread_id })
+        }
+
+        fn create(on_event: &'static OnSession) -> Result<(), Error> {
+            // SAFETY: no preconditions; `None` asks for this executable.
+            let module = unsafe { GetModuleHandleW(None) }.map_err(|e| Error::Com(e.to_string()))?;
+            let instance = HINSTANCE(module.0);
+            let class = WNDCLASSW {
+                lpfnWndProc: Some(wndproc),
+                hInstance: instance,
+                lpszClassName: CLASS,
+                ..Default::default()
+            };
+            // SAFETY: `class` is fully initialised; registering twice in one
+            // process fails harmlessly (the first registration is used).
+            unsafe { RegisterClassW(&raw const class) };
+            // A hidden top-level window: message-only windows do not get
+            // WM_QUERYENDSESSION. SAFETY: the class is registered; the
+            // create parameter is the leaked closure (see `wndproc`).
+            unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE(0),
+                    CLASS,
+                    w!("MixerCraft session watch"),
+                    WS_OVERLAPPED,
+                    0,
+                    0,
+                    0,
+                    0,
+                    None,
+                    None,
+                    Some(instance),
+                    Some(std::ptr::from_ref(on_event).cast::<c_void>()),
+                )
+            }
+            .map_err(|e| Error::Com(format!("CreateWindowExW failed: {e}")))?;
+            Ok(())
+        }
+
+        fn pump() {
+            let mut msg = MSG::default();
+            // SAFETY: `msg` is a valid out pointer; the loop ends on WM_QUIT
+            // (0) or an error (-1).
+            while unsafe { GetMessageW(&raw mut msg, None, 0, 0) }.0 > 0 {
+                // SAFETY: `msg` came from GetMessageW.
+                unsafe { DispatchMessageW(&raw const msg) };
+            }
+        }
+    }
 }
 
 #[cfg(not(windows))]
 mod imp {
-    use super::{DeviceState, Error, OnEvent};
+    use super::{DeviceState, Error, OnEvent, OnSession};
 
     pub(crate) struct Registration;
+    pub(crate) struct SessionWindow;
+
+    pub(super) fn session_window(_on_event: OnSession) -> Result<SessionWindow, Error> {
+        Err(Error::Unsupported)
+    }
 
     pub(super) fn device_state(_instance_id: &str) -> Result<Option<DeviceState>, Error> {
         Err(Error::Unsupported)
@@ -233,6 +418,28 @@ mod tests {
     #[cfg(windows)]
     fn power_notifications_register() {
         let watch = watch_power(|_| {}).unwrap();
+        drop(watch);
+    }
+
+    /// The hidden window turns the session messages into events (sent to
+    /// our own window here; Windows sends the same at sign-out/shutdown).
+    #[test]
+    #[cfg(windows)]
+    fn session_end_messages_become_events() {
+        use std::sync::{Arc, Mutex};
+        use windows::Win32::Foundation::{LPARAM, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, SendMessageW, WM_ENDSESSION, WM_QUERYENDSESSION};
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let s = Arc::clone(&seen);
+        let watch = watch_session_end(move |e| s.lock().unwrap().push(e)).unwrap();
+        // SAFETY: plain window lookup and messages to our own window.
+        unsafe {
+            let hwnd = FindWindowW(imp::session_class(), windows_core::w!("MixerCraft session watch")).unwrap();
+            assert_eq!(SendMessageW(hwnd, WM_QUERYENDSESSION, None, None).0, 1, "never blocks the session end");
+            SendMessageW(hwnd, WM_ENDSESSION, Some(WPARAM(0)), Some(LPARAM(0)));
+            SendMessageW(hwnd, WM_ENDSESSION, Some(WPARAM(1)), Some(LPARAM(0)));
+        }
+        assert_eq!(*seen.lock().unwrap(), [SessionEvent::Ending, SessionEvent::Cancelled, SessionEvent::Ended]);
         drop(watch);
     }
 }
