@@ -135,6 +135,12 @@ enum Cmd {
         #[command(subcommand)]
         action: AutostartCmd,
     },
+    /// Global keyboard shortcuts that work while other applications have
+    /// the focus (e.g. mute the microphone during a game).
+    Hotkey {
+        #[command(subcommand)]
+        action: HotkeyCmd,
+    },
     /// Stop the engine.
     Shutdown,
     /// Check the release feed for a newer version (the app does this on
@@ -179,6 +185,200 @@ enum AutostartCmd {
     },
     /// Show whether the engine and the desktop app start at sign-in.
     Status,
+}
+
+#[derive(Debug, Subcommand)]
+enum HotkeyCmd {
+    /// List the shortcuts and whether they are active.
+    List,
+    /// Add a shortcut, e.g. `mixercraft hotkey add Ctrl+Alt+M strip-mute 2`.
+    Add(HotkeySpec),
+    /// Replace shortcut ID (keys, action and target).
+    Set {
+        id: u32,
+        #[command(flatten)]
+        spec: HotkeySpec,
+    },
+    /// Remove shortcut ID.
+    Remove { id: u32 },
+    /// Remove all shortcuts.
+    Clear,
+    /// Run shortcut ID as if its keys were pressed and released.
+    Trigger {
+        id: u32,
+        /// Only press (a hold shortcut then stays switched) or only release.
+        #[arg(long, value_enum, default_value = "tap")]
+        state: KeyState,
+    },
+    /// Confirmation tone when a shortcut fires: "off" or the bus (index)
+    /// that plays it. Do not choose a bus other applications record from
+    /// (e.g. the one Discord uses as microphone): they would hear it.
+    Feedback {
+        bus: String,
+        /// Tone level in dBFS peak (-60 to -6).
+        #[arg(long, allow_negative_numbers = true)]
+        level: Option<f32>,
+    },
+}
+
+#[derive(Debug, clap::Args)]
+struct HotkeySpec {
+    /// Key combination, e.g. Ctrl+Alt+M, Shift+F13, Pause, Win+Num5.
+    /// Letters, digits, Space and the like need Ctrl, Alt or Win.
+    keys: String,
+    /// What the shortcut does.
+    #[arg(value_enum)]
+    action: HotkeyKind,
+    /// Strip or bus index (as in `mixercraft status`).
+    target: u16,
+    /// Fader step in dB for strip-gain and bus-gain (negative = quieter).
+    #[arg(long, allow_negative_numbers = true, default_value_t = 3.0)]
+    step: f32,
+    /// Act only while the keys are held: push-to-talk on a muted strip,
+    /// push-to-mute on an open one.
+    #[arg(long)]
+    hold: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum HotkeyKind {
+    StripMute,
+    StripSolo,
+    StripGain,
+    BusMute,
+    BusGain,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum KeyState {
+    Tap,
+    Press,
+    Release,
+}
+
+impl HotkeySpec {
+    fn to_ipc(&self, id: u32) -> mixercraft_ipc::Hotkey {
+        use mixercraft_ipc::HotkeyAction as A;
+        let (t, step_db) = (self.target, self.step);
+        let action = match self.action {
+            HotkeyKind::StripMute => A::StripMute { strip: t },
+            HotkeyKind::StripSolo => A::StripSolo { strip: t },
+            HotkeyKind::StripGain => A::StripGain { strip: t, step_db },
+            HotkeyKind::BusMute => A::BusMute { bus: t },
+            HotkeyKind::BusGain => A::BusGain { bus: t, step_db },
+        };
+        let mode = if self.hold { mixercraft_ipc::HotkeyMode::Hold } else { mixercraft_ipc::HotkeyMode::Toggle };
+        mixercraft_ipc::Hotkey { id, keys: self.keys.clone(), mode, action }
+    }
+}
+
+/// "Ctrl+Alt+M  mute strip 2 (Mic)".
+fn describe_hotkey(h: &mixercraft_ipc::Hotkey, s: &mixercraft_ipc::EngineStatus) -> String {
+    use mixercraft_ipc::HotkeyAction as A;
+    let strip = |i: u16| {
+        let name = s.strips.get(usize::from(i)).map_or("?", |x| x.name.as_str());
+        format!("strip {i} ({name})")
+    };
+    let bus = |i: u16| {
+        let b = s.buses.get(usize::from(i));
+        format!("bus {i} ({} {})", b.map_or("?", |x| x.id.as_str()), b.map_or("", |x| x.name.as_str()))
+    };
+    let what = match &h.action {
+        A::StripMute { strip: i } => format!("mute {}", strip(*i)),
+        A::StripSolo { strip: i } => format!("solo {}", strip(*i)),
+        A::StripGain { strip: i, step_db } => format!("{step_db:+} dB on {}", strip(*i)),
+        A::BusMute { bus: i } => format!("mute {}", bus(*i)),
+        A::BusGain { bus: i, step_db } => format!("{step_db:+} dB on {}", bus(*i)),
+    };
+    let hold = if h.mode == mixercraft_ipc::HotkeyMode::Hold { ", while held" } else { "" };
+    format!("{:>3}  {:22} {what}{hold}", h.id, h.keys)
+}
+
+fn print_hotkeys(s: &mixercraft_ipc::EngineStatus) {
+    let Some(h) = &s.hotkeys else {
+        println!("the running engine is older than this mixercraft and has no hotkeys; restart it");
+        return;
+    };
+    if !h.available {
+        println!("global hotkeys are not available: {}", h.note);
+    }
+    if h.bindings.is_empty() {
+        println!("no hotkeys (add one with `mixercraft hotkey add Ctrl+Alt+M strip-mute 0`)");
+    }
+    for b in &h.bindings {
+        let state = match (&b.error, b.active) {
+            (Some(e), _) => format!("  [inactive: {e}]"),
+            (None, false) if h.available => "  [inactive]".into(),
+            _ => String::new(),
+        };
+        println!("{}{state}", describe_hotkey(&b.hotkey, s));
+    }
+    match h.feedback.bus {
+        Some(b) => {
+            let id = s.buses.get(usize::from(b)).map_or("?", |x| x.id.as_str());
+            println!("confirmation tone: bus {b} ({id}) at {:.0} dBFS", h.feedback.level_db);
+        }
+        None => println!("confirmation tone: off"),
+    }
+}
+
+fn hotkey(action: &HotkeyCmd) -> anyhow::Result<()> {
+    let mut c =
+        Client::connect("mixercraft-cli").context("cannot reach the MixerCraft engine (is mixercraftd running?)")?;
+    let status = |c: &mut Client| -> anyhow::Result<mixercraft_ipc::EngineStatus> {
+        match c.request(&Request::Status)? {
+            Response::Status(s) => Ok(*s),
+            other => anyhow::bail!("unexpected answer: {other:?}"),
+        }
+    };
+    let s = status(&mut c)?;
+    let Some(hk) = &s.hotkeys else {
+        anyhow::bail!(
+            "the running engine is older than this mixercraft and has no hotkeys; restart it              (`mixercraft shutdown`, then start mixercraftd or the app)"
+        )
+    };
+    let send = |c: &mut Client, r: Request| -> anyhow::Result<()> {
+        match c.request(&r)? {
+            Response::Ok => Ok(()),
+            Response::Error { message, .. } => anyhow::bail!("{message}"),
+            other => anyhow::bail!("unexpected answer: {other:?}"),
+        }
+    };
+    match action {
+        HotkeyCmd::List => {
+            print_hotkeys(&s);
+            return Ok(());
+        }
+        HotkeyCmd::Add(spec) => send(&mut c, Request::SetHotkey { hotkey: spec.to_ipc(0) })?,
+        HotkeyCmd::Set { id, spec } => send(&mut c, Request::SetHotkey { hotkey: spec.to_ipc(*id) })?,
+        HotkeyCmd::Remove { id } => send(&mut c, Request::RemoveHotkey { id: *id })?,
+        HotkeyCmd::Clear => {
+            for b in &hk.bindings {
+                send(&mut c, Request::RemoveHotkey { id: b.hotkey.id })?;
+            }
+        }
+        HotkeyCmd::Trigger { id, state } => {
+            if *state != KeyState::Release {
+                send(&mut c, Request::TriggerHotkey { id: *id, pressed: true })?;
+            }
+            if *state != KeyState::Press {
+                send(&mut c, Request::TriggerHotkey { id: *id, pressed: false })?;
+            }
+            return Ok(());
+        }
+        HotkeyCmd::Feedback { bus, level } => {
+            let mut feedback = hk.feedback;
+            feedback.bus = if bus.eq_ignore_ascii_case("off") {
+                None
+            } else {
+                Some(bus.parse().context("expected `off` or a bus index")?)
+            };
+            feedback.level_db = level.unwrap_or(feedback.level_db);
+            send(&mut c, Request::SetHotkeyFeedback { feedback })?;
+        }
+    }
+    print_hotkeys(&status(&mut c)?);
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -228,6 +428,7 @@ fn main() -> anyhow::Result<()> {
         Cmd::Autostart { action } => return autostart(action),
         Cmd::CloseApp { timeout } => return close_app(std::time::Duration::from_secs(*timeout)),
         Cmd::Update { feed, download } => return update(feed.clone(), *download),
+        Cmd::Hotkey { action } => return hotkey(action),
         _ => {}
     }
     let mut c =
@@ -296,6 +497,7 @@ fn main() -> anyhow::Result<()> {
         | Cmd::DefaultConfig
         | Cmd::Autostart { .. }
         | Cmd::CloseApp { .. }
+        | Cmd::Hotkey { .. }
         | Cmd::Update { .. } => {
             unreachable!("handled above")
         }
@@ -378,6 +580,10 @@ fn main() -> anyhow::Result<()> {
                         String::new()
                     }
                 );
+            }
+            if s.hotkeys.as_ref().is_some_and(|h| !h.bindings.is_empty()) {
+                println!("hotkeys:");
+                print_hotkeys(&s);
             }
             if !s.recovery_events.is_empty() {
                 println!("recovery events:");

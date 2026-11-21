@@ -14,6 +14,7 @@
 mod engine;
 mod fader_law;
 mod fx_law;
+mod hotkeys;
 mod meters;
 mod settings;
 #[cfg(any(windows, target_os = "macos"))]
@@ -555,7 +556,7 @@ fn khz(rate: u32) -> String {
 }
 
 /// Picker label of a bus.
-fn bus_label(id: &str, name: &str) -> String {
+pub(crate) fn bus_label(id: &str, name: &str) -> String {
     if id == name { id.to_owned() } else { format!("{id} · {name}") }
 }
 
@@ -807,7 +808,10 @@ fn apply(ui: &MainWindow, update: Update) {
             ui.set_status_color(Color::from_rgb_u8(0x7c, 0x85, 0x92));
             ui.set_connection_hint(hint.into());
         }
-        Update::Status(s) => apply_status(ui, &s),
+        Update::Status(s) => {
+            apply_status(ui, &s);
+            hotkeys::apply_status(ui, &s);
+        }
         Update::Meters { strips, buses } => {
             apply_meters(&ui.get_strip_meters(), &strips);
             apply_meters(&ui.get_bus_meters(), &buses);
@@ -881,6 +885,10 @@ fn set_gain(row: &mut StripView, pos: f32) -> f32 {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
+    if std::env::args().nth(1).as_deref() == Some(hotkeys::RECORD_ARG) {
+        hotkeys::record_child();
+        return Ok(());
+    }
     let start_hidden = std::env::args().any(|a| a == "--tray");
     // Wayland/X11 window class: matches `mixercraft.desktop`, so the desktop
     // shows the launcher's name and icon for the window.
@@ -1138,6 +1146,7 @@ fn main() -> Result<(), slint::PlatformError> {
             on_setting(&ui, &t, kind, value);
         }
     });
+    hotkeys::install(&ui, tx.clone());
 
     if let Some(listener) = instance {
         let w = ui.as_weak();

@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 mixercraft-config.workspace = true
 mixercraft-ipc.workspace = true
+mixercraft-hotkey.workspace = true
 mixercraft-platform.workspace = true
 serde.workspace = true
 mixercraft-update.workspace = true

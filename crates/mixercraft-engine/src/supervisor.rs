@@ -29,7 +29,10 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use mixercraft_config::{BusConfig, Config, DeviceRef, FxConfig, Sink, Source, StripConfig};
+use mixercraft_config::{
+    BusConfig, Config, DeviceRef, FxConfig, HotkeyAction, HotkeyMode, HotkeysConfig, Sink, Source, StripConfig,
+};
+use mixercraft_core::chime::ChimeKind;
 use mixercraft_core::engine::{Command, EngineHandle, engine};
 use mixercraft_core::fifo::{FifoSpec, fifo};
 use mixercraft_core::fx::FxParams;
@@ -44,6 +47,7 @@ use mixercraft_platform::{AudioSystem, DeviceSelector, FaultKind, OpenStream, St
 use tracing::{debug, error, info, warn};
 
 use crate::clock::{SharedCore, SoftwareClock, drive};
+use crate::hotkeys::{self, Hotkeys};
 
 /// Consecutive quick retries before a device is reported as failed.
 const MAX_FAST_ATTEMPTS: u32 = 10;
@@ -179,6 +183,8 @@ pub struct Supervisor {
     /// Engine settings the engine started with, and the id of the bus that
     /// clocked it then (to tell when a restart is needed).
     started_with: (mixercraft_config::EngineConfig, Option<String>),
+    /// Global keyboard shortcuts.
+    hotkeys: Hotkeys,
 }
 
 fn selector_for_source(s: &Source) -> Option<DeviceSelector> {
@@ -364,7 +370,16 @@ impl Supervisor {
             last_error: None,
             master_progress: (0, now),
             started_with,
+            hotkeys: Hotkeys::without_listener("the engine has not started its hotkey listener"),
         })
+    }
+
+    /// Takes the system hotkey listener (started by `main` because it
+    /// forwards into the request queue) and registers the configured
+    /// shortcuts.
+    pub fn set_hotkey_listener(&mut self, listener: Result<mixercraft_hotkey::Listener, mixercraft_hotkey::Error>) {
+        self.hotkeys = Hotkeys::new(listener);
+        self.hotkeys.apply(&self.config.hotkeys);
     }
 
     fn request(config: &Config, sample_rate: u32) -> StreamRequest {
@@ -898,8 +913,14 @@ impl Supervisor {
         }
         let mut config = self.config.clone();
         let removed = config.strips.remove(i);
+        let strip = u16::try_from(i).unwrap_or(u16::MAX);
+        config.hotkeys.bindings.retain_mut(|b| !b.action.on_strip_removed(strip));
+        let hotkeys_changed = config.hotkeys != self.config.hotkeys;
         let r = self.reshape(config, Some(i), None);
         if matches!(r, Response::Ok) {
+            if hotkeys_changed {
+                self.hotkeys.apply(&self.config.hotkeys);
+            }
             info!(strip = %removed.name, "strip removed");
             self.log_event(&removed.name, "removed", "strip removed");
         }
@@ -921,6 +942,11 @@ impl Supervisor {
         for s in &mut config.strips {
             s.routes.retain(|r| *r != removed.id);
         }
+        config.hotkeys.bindings.retain(|h| h.action.bus() != Some(removed.id.as_str()));
+        if config.hotkeys.feedback_bus.as_deref() == Some(removed.id.as_str()) {
+            config.hotkeys.feedback_bus = None;
+        }
+        let hotkeys_changed = config.hotkeys != self.config.hotkeys;
         // Keep the same master bus (it is chosen by id, or as the first bus
         // with a device).
         if config.engine.master_bus.is_none() {
@@ -929,6 +955,9 @@ impl Supervisor {
         }
         let r = self.reshape(config, None, Some(b));
         if matches!(r, Response::Ok) {
+            if hotkeys_changed {
+                self.hotkeys.apply(&self.config.hotkeys);
+            }
             info!(bus = %removed.name, "bus removed");
             self.log_event(&removed.name, "removed", "bus removed");
         }
@@ -999,6 +1028,137 @@ impl Supervisor {
         }
         self.dirty_since = Some(Instant::now());
         Response::Ok
+    }
+
+    /// Validates, applies, registers and saves new shortcut settings.
+    fn store_hotkeys(&mut self, hotkeys: HotkeysConfig) -> Response {
+        let mut config = self.config.clone();
+        config.hotkeys = hotkeys;
+        if let Err(e) = config.validate() {
+            return Response::Error { code: ErrorCode::InvalidArgument, message: e.to_string() };
+        }
+        let keys_changed = config.hotkeys.bindings != self.config.hotkeys.bindings;
+        self.config = config;
+        if keys_changed {
+            self.hotkeys.apply(&self.config.hotkeys);
+        }
+        self.dirty_since = Some(Instant::now());
+        self.save_config(true);
+        Response::Ok
+    }
+
+    fn set_hotkey(&mut self, hotkey: &mixercraft_ipc::Hotkey) -> Response {
+        let mut binding = match hotkeys::from_ipc(hotkey, &self.config) {
+            Ok(b) => b,
+            Err(e) => return Response::Error { code: ErrorCode::InvalidArgument, message: e },
+        };
+        let mut all = self.config.hotkeys.clone();
+        let added = binding.id == 0;
+        if added {
+            binding.id = all.next_id();
+            all.bindings.push(binding.clone());
+        } else if let Some(slot) = all.bindings.iter_mut().find(|b| b.id == binding.id) {
+            *slot = binding.clone();
+        } else {
+            return Response::Error { code: ErrorCode::InvalidArgument, message: "no such hotkey".into() };
+        }
+        let r = self.store_hotkeys(all);
+        if matches!(r, Response::Ok) {
+            let what = if added { "hotkey added" } else { "hotkey changed" };
+            info!(id = binding.id, keys = %binding.keys, action = ?binding.action, "{what}");
+        }
+        r
+    }
+
+    fn remove_hotkey(&mut self, id: u32) -> Response {
+        let mut all = self.config.hotkeys.clone();
+        let before = all.bindings.len();
+        all.bindings.retain(|b| b.id != id);
+        if all.bindings.len() == before {
+            return Response::Error { code: ErrorCode::InvalidArgument, message: "no such hotkey".into() };
+        }
+        self.hotkeys.release(id);
+        self.store_hotkeys(all)
+    }
+
+    fn set_hotkey_feedback(&mut self, feedback: mixercraft_ipc::HotkeyFeedback) -> Response {
+        let mut all = self.config.hotkeys.clone();
+        all.feedback_bus = match feedback.bus {
+            None => None,
+            Some(b) => match self.config.buses.get(usize::from(b)) {
+                Some(bus) => Some(bus.id.clone()),
+                None => return Response::Error { code: ErrorCode::InvalidArgument, message: "no such bus".into() },
+            },
+        };
+        all.feedback_level_db = feedback.level_db;
+        self.store_hotkeys(all)
+    }
+
+    /// The new on/off value of a mute or solo shortcut, or `None` when the
+    /// event changes nothing (release in toggle mode, repeated press).
+    fn switched(&mut self, id: u32, mode: HotkeyMode, pressed: bool, current: bool) -> Option<bool> {
+        match (mode, pressed) {
+            (HotkeyMode::Toggle, true) => Some(!current),
+            (HotkeyMode::Toggle, false) => None,
+            (HotkeyMode::Hold, true) => self.hotkeys.hold(id, current).then_some(!current),
+            (HotkeyMode::Hold, false) => self.hotkeys.release(id).filter(|v| *v != current),
+        }
+    }
+
+    /// Runs a shortcut's action through the normal request path (ramped,
+    /// persisted), then plays the confirmation tone.
+    fn trigger_hotkey(&mut self, id: u32, pressed: bool) -> Response {
+        let invalid = |m: &str| Response::Error { code: ErrorCode::InvalidArgument, message: m.into() };
+        let Some(binding) = self.config.hotkeys.bindings.iter().find(|b| b.id == id).cloned() else {
+            return invalid("no such hotkey");
+        };
+        let bus_of = |config: &Config, id: &str| config.bus_index(id).and_then(|b| u16::try_from(b).ok());
+        let (request, up) = match &binding.action {
+            HotkeyAction::StripGain { strip, step_db } => {
+                let Some(s) = self.config.strips.get(usize::from(*strip)) else { return invalid("no such strip") };
+                if !pressed {
+                    return Response::Ok;
+                }
+                let db = hotkeys::stepped_gain(s.gain_db, *step_db);
+                (Request::SetStripGain { strip: *strip, db }, *step_db > 0.0)
+            }
+            HotkeyAction::BusGain { bus, step_db } => {
+                let Some(b) = bus_of(&self.config, bus) else { return invalid("no such bus") };
+                if !pressed {
+                    return Response::Ok;
+                }
+                let db = hotkeys::stepped_gain(self.config.buses[usize::from(b)].gain_db, *step_db);
+                (Request::SetBusGain { bus: b, db }, *step_db > 0.0)
+            }
+            HotkeyAction::StripMute { strip } => {
+                let Some(s) = self.config.strips.get(usize::from(*strip)) else { return invalid("no such strip") };
+                let current = s.mute;
+                let Some(mute) = self.switched(id, binding.mode, pressed, current) else { return Response::Ok };
+                (Request::SetStripMute { strip: *strip, mute }, !mute)
+            }
+            HotkeyAction::StripSolo { strip } => {
+                let Some(s) = self.config.strips.get(usize::from(*strip)) else { return invalid("no such strip") };
+                let current = s.solo;
+                let Some(solo) = self.switched(id, binding.mode, pressed, current) else { return Response::Ok };
+                (Request::SetStripSolo { strip: *strip, solo }, solo)
+            }
+            HotkeyAction::BusMute { bus } => {
+                let Some(b) = bus_of(&self.config, bus) else { return invalid("no such bus") };
+                let current = self.config.buses[usize::from(b)].mute;
+                let Some(mute) = self.switched(id, binding.mode, pressed, current) else { return Response::Ok };
+                (Request::SetBusMute { bus: b, mute }, !mute)
+            }
+        };
+        info!(keys = %binding.keys, pressed, ?request, "hotkey");
+        let r = self.handle_request(request);
+        if matches!(r, Response::Ok) {
+            let level_db = self.config.hotkeys.feedback_level_db;
+            if let Some(bus) = self.config.hotkeys.feedback_bus.as_deref().and_then(|id| bus_of(&self.config, id)) {
+                let kind = if up { ChimeKind::Up } else { ChimeKind::Down };
+                self.send(Command::Mixer(MixerCommand::BusChime { bus, kind, level_db }));
+            }
+        }
+        r
     }
 
     fn send(&mut self, cmd: Command) {
@@ -1102,6 +1262,10 @@ impl Supervisor {
                     Err(_) => Response::Error { code: ErrorCode::Busy, message: "engine command queue full".into() },
                 };
             }
+            Request::SetHotkey { hotkey } => return self.set_hotkey(&hotkey),
+            Request::RemoveHotkey { id } => return self.remove_hotkey(id),
+            Request::SetHotkeyFeedback { feedback } => return self.set_hotkey_feedback(feedback),
+            Request::TriggerHotkey { id, pressed } => return self.trigger_hotkey(id, pressed),
             Request::Status => return Response::Status(Box::new(self.status())),
             Request::Meters => return Response::Meters(self.meter_snapshot()),
             Request::Devices => {
@@ -1353,6 +1517,7 @@ impl Supervisor {
             }),
             restart_required: self.restart_required(),
             config_path: self.config_path.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
+            hotkeys: Some(self.hotkeys.status(&self.config)),
         }
     }
 }
@@ -1526,6 +1691,105 @@ mod tests {
         ok(s.handle_request(Request::AddBus { name: String::new() }));
         assert_eq!(s.config.buses[2].id, "A2");
         assert!(matches!(s.handle_request(Request::RemoveStrip { strip: 9 }), Response::Error { .. }));
+    }
+
+    fn hotkey(keys: &str, mode: mixercraft_ipc::HotkeyMode, action: mixercraft_ipc::HotkeyAction) -> Request {
+        Request::SetHotkey { hotkey: mixercraft_ipc::Hotkey { id: 0, keys: keys.into(), mode, action } }
+    }
+
+    fn hotkey_status(s: &Supervisor) -> mixercraft_ipc::HotkeysStatus {
+        s.status().hotkeys.expect("engine reports hotkeys")
+    }
+
+    #[test]
+    fn hotkeys_toggle_hold_and_step_through_the_normal_path() {
+        use mixercraft_ipc::{HotkeyAction as A, HotkeyFeedback, HotkeyMode as M};
+        let mut s = deviceless();
+        ok(s.handle_request(Request::AddStrip { name: "Mic".into() }));
+        ok(s.handle_request(Request::AddBus { name: "Chat".into() }));
+        ok(s.handle_request(hotkey("alt+ctrl+m", M::Toggle, A::StripMute { strip: 1 })));
+        ok(s.handle_request(hotkey("F13", M::Hold, A::BusMute { bus: 1 })));
+        ok(s.handle_request(hotkey("Ctrl+Shift+Up", M::Toggle, A::StripGain { strip: 0, step_db: 3.0 })));
+        let st = hotkey_status(&s);
+        assert!(!st.available, "no listener in tests");
+        let ids: Vec<u32> = st.bindings.iter().map(|b| b.hotkey.id).collect();
+        assert_eq!(ids, [1, 2, 3]);
+        assert_eq!(st.bindings[0].hotkey.keys, "Ctrl+Alt+M", "stored canonically");
+        assert!(
+            matches!(
+                s.handle_request(hotkey("Ctrl+Alt+M", M::Toggle, A::StripSolo { strip: 0 })),
+                Response::Error { .. }
+            ),
+            "same keys twice"
+        );
+        assert!(matches!(s.handle_request(hotkey("M", M::Toggle, A::StripSolo { strip: 0 })), Response::Error { .. }));
+
+        // Toggle: each press switches; releases do nothing.
+        ok(s.handle_request(Request::TriggerHotkey { id: 1, pressed: true }));
+        assert!(s.config.strips[1].mute);
+        ok(s.handle_request(Request::TriggerHotkey { id: 1, pressed: false }));
+        assert!(s.config.strips[1].mute);
+        ok(s.handle_request(Request::TriggerHotkey { id: 1, pressed: true }));
+        assert!(!s.config.strips[1].mute);
+
+        // Hold: push-to-mute on an open bus, then push-to-talk on a muted one.
+        ok(s.handle_request(Request::TriggerHotkey { id: 2, pressed: true }));
+        assert!(s.config.buses[1].mute);
+        ok(s.handle_request(Request::TriggerHotkey { id: 2, pressed: true }));
+        assert!(s.config.buses[1].mute, "a repeated press does not flip back");
+        ok(s.handle_request(Request::TriggerHotkey { id: 2, pressed: false }));
+        assert!(!s.config.buses[1].mute);
+        ok(s.handle_request(Request::SetBusMute { bus: 1, mute: true }));
+        ok(s.handle_request(Request::TriggerHotkey { id: 2, pressed: true }));
+        assert!(!s.config.buses[1].mute, "talking while held");
+        ok(s.handle_request(Request::TriggerHotkey { id: 2, pressed: false }));
+        assert!(s.config.buses[1].mute);
+
+        // Gain steps, clamped to the fader range.
+        for _ in 0..6 {
+            ok(s.handle_request(Request::TriggerHotkey { id: 3, pressed: true }));
+        }
+        assert_eq!(s.config.strips[0].gain_db, 12.0);
+        assert!(matches!(s.handle_request(Request::TriggerHotkey { id: 9, pressed: true }), Response::Error { .. }));
+
+        // Confirmation tone.
+        let feedback = HotkeyFeedback { bus: Some(1), level_db: -30.0 };
+        ok(s.handle_request(Request::SetHotkeyFeedback { feedback }));
+        assert_eq!(hotkey_status(&s).feedback, feedback);
+        assert_eq!(s.config.hotkeys.feedback_bus.as_deref(), Some("A2"));
+        ok(s.handle_request(Request::TriggerHotkey { id: 1, pressed: true }));
+        let bad = HotkeyFeedback { bus: Some(1), level_db: 3.0 };
+        assert!(matches!(s.handle_request(Request::SetHotkeyFeedback { feedback: bad }), Response::Error { .. }));
+
+        // Editing and removing.
+        let mut changed = hotkey_status(&s).bindings[0].hotkey.clone();
+        changed.keys = "Ctrl+Alt+N".into();
+        ok(s.handle_request(Request::SetHotkey { hotkey: changed }));
+        assert_eq!(s.config.hotkeys.bindings[0].keys, "Ctrl+Alt+N");
+        ok(s.handle_request(Request::RemoveHotkey { id: 3 }));
+        assert!(matches!(s.handle_request(Request::RemoveHotkey { id: 3 }), Response::Error { .. }));
+        assert_eq!(s.config.hotkeys.bindings.len(), 2);
+    }
+
+    #[test]
+    fn removing_strips_and_buses_updates_hotkeys() {
+        use mixercraft_ipc::{HotkeyAction as A, HotkeyFeedback, HotkeyMode as M};
+        let mut s = deviceless();
+        ok(s.handle_request(Request::AddStrip { name: "Game".into() }));
+        ok(s.handle_request(Request::AddStrip { name: "Mic".into() }));
+        ok(s.handle_request(Request::AddBus { name: "Chat".into() }));
+        ok(s.handle_request(hotkey("Ctrl+Alt+1", M::Toggle, A::StripMute { strip: 1 })));
+        ok(s.handle_request(hotkey("Ctrl+Alt+2", M::Toggle, A::StripMute { strip: 2 })));
+        ok(s.handle_request(hotkey("Ctrl+Alt+3", M::Toggle, A::BusMute { bus: 1 })));
+        ok(s.handle_request(Request::SetHotkeyFeedback { feedback: HotkeyFeedback { bus: Some(1), level_db: -20.0 } }));
+        ok(s.handle_request(Request::RemoveStrip { strip: 1 }));
+        let b = &s.config.hotkeys.bindings;
+        assert_eq!(b.len(), 2, "the removed strip's shortcut is gone");
+        assert_eq!(b[0].action, HotkeyAction::StripMute { strip: 1 }, "Mic moved up and its shortcut follows");
+        ok(s.handle_request(Request::RemoveBus { bus: 1 }));
+        assert_eq!(s.config.hotkeys.bindings.len(), 1);
+        assert_eq!(s.config.hotkeys.feedback_bus, None);
+        s.config.validate().unwrap();
     }
 
     #[test]

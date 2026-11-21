@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Global keyboard shortcuts (Windows): a key combination mutes or unmutes an
+  input or output, solos an input or moves a fader, also while a game or
+  another app has the focus and while the MixerCraft window is closed (the
+  engine listens). "While held" mode switches only as long as the keys are
+  held: push-to-talk on a muted microphone, push-to-mute on an open one.
+  Optional confirmation tone (rising: on, falling: off) on an output you
+  choose, heard even when the shortcut just muted that output. New
+  *Hotkeys* tab to record a combination and pick the action, and
+  `mixercraft hotkey list|add|set|remove|clear|trigger|feedback`.
+  Combinations another program already uses are shown as inactive. Letters,
+  digits and similar keys need Ctrl, Alt or Win (F13-F24, Pause, ScrollLock
+  and numpad keys work alone). Linux and macOS: planned (ADR 0011).
+- Configuration schema 5: optional `[hotkeys]` table (`feedback_bus`,
+  `feedback_level_db`, `[[hotkeys.bindings]]`). Older files are upgraded
+  automatically; older engines cannot read schema 5 files.
+
 ### Fixed
 - Windows: game and app audio crackled through virtual devices while the
   PC was busy (e.g. playing a game), but not when played straight to the

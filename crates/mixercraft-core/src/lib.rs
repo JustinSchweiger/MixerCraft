@@ -8,6 +8,7 @@
 //! * [`meter`] – lock-free peak/RMS metering,
 //! * [`channel_map`] – channel up/down-mixing matrices,
 //! * [`mixer`] – strips, buses and the routing matrix,
+//! * [`chime`] – hotkey confirmation tones on a bus,
 //! * [`resampler`] – band-limited variable-ratio sample-rate conversion,
 //! * [`drift`] – clock-drift compensation control loop,
 //! * [`fifo`] – lock-free device FIFOs combining the above,
@@ -24,6 +25,7 @@
 
 pub mod buffer;
 pub mod channel_map;
+pub mod chime;
 pub mod denoise;
 pub mod drift;
 pub mod dsp;

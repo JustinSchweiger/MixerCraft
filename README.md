@@ -43,6 +43,7 @@ and keeps running cleanly for days.
 | 🔈 **Keep awake** | A short, very quiet pulse every few minutes of silence stops speakers with auto-standby from switching off |
 | 🖥️ **Tray and sign-in** | Lives in the system tray, opens at sign-in if you want, one instance only |
 | 🔄 **Updates** | Checks for new versions and installs them when you click *Download and install* |
+| 🎹 **Global hotkeys** | Mute the microphone or an output with a key combination, even while a game has the focus; hold-to-talk mode and an optional confirmation tone (Windows) |
 | ⌨️ **Command line** | `mixercraft` controls every fader, route and device from a terminal or script |
 
 ## Screenshots
@@ -140,6 +141,7 @@ crates/
   mixercraft-platform/  audio devices (cpal), virtual devices, autostart
   mixercraft-usbip/     USB/IP server emulating USB audio devices
   mixercraft-winaudio/  Windows default-device handling
+  mixercraft-hotkey/    global keyboard shortcuts (Windows)
   mixercraft-engine/    mixercraftd: supervisor, recovery, clocks
   mixercraft-ipc/       protocol between engine, app and CLI
   mixercraft-config/    configuration file and migrations

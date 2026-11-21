@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// The schema version written by this build.
-pub const CURRENT_SCHEMA_VERSION: u32 = 4;
+pub const CURRENT_SCHEMA_VERSION: u32 = 5;
 
 /// Gate thresholds at or below this mean "gate off" (mirrors the engine).
 pub const GATE_OFF_DB: f32 = -80.0;
@@ -338,6 +338,117 @@ pub struct Config {
     /// Output buses in display order.
     #[serde(default)]
     pub buses: Vec<BusConfig>,
+    /// Global keyboard shortcuts (schema 5).
+    #[serde(default, skip_serializing_if = "HotkeysConfig::is_default")]
+    pub hotkeys: HotkeysConfig,
+}
+
+/// Global keyboard shortcuts and their confirmation tone (schema 5).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HotkeysConfig {
+    /// Id of the bus that plays a short confirmation tone when a hotkey
+    /// fires (`None`: no tone). Should not be a bus other applications
+    /// record from, or the tone goes into the call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feedback_bus: Option<String>,
+    /// Tone level (dBFS peak), -60 to -6.
+    pub feedback_level_db: f32,
+    /// The shortcuts.
+    pub bindings: Vec<HotkeyBinding>,
+}
+
+impl Default for HotkeysConfig {
+    fn default() -> Self {
+        Self { feedback_bus: None, feedback_level_db: -20.0, bindings: Vec::new() }
+    }
+}
+
+impl HotkeysConfig {
+    /// Whether these are the defaults (not written to the file then).
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The next free binding id.
+    #[must_use]
+    pub fn next_id(&self) -> u32 {
+        self.bindings.iter().map(|b| b.id).max().unwrap_or(0) + 1
+    }
+}
+
+/// One global keyboard shortcut.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HotkeyBinding {
+    /// Stable id (unique, > 0).
+    pub id: u32,
+    /// Key combination, e.g. `"Ctrl+Alt+M"` (see `mixercraft_hotkey::Combo`).
+    pub keys: String,
+    /// Toggle on each press, or only while held.
+    #[serde(default)]
+    pub mode: HotkeyMode,
+    /// What the shortcut does.
+    pub action: HotkeyAction,
+}
+
+/// How a shortcut acts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum HotkeyMode {
+    /// Each press switches (mute on, mute off).
+    #[default]
+    Toggle,
+    /// Switches while the key is held and back on release: push-to-talk on
+    /// a muted strip, push-to-mute on an open one. Gain steps ignore it.
+    Hold,
+}
+
+/// What a shortcut does. Strips are addressed by position (0 = first), buses
+/// by id; removing a strip or bus updates or removes the bindings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum HotkeyAction {
+    /// Mute or unmute an input strip.
+    StripMute { strip: u16 },
+    /// Solo or unsolo an input strip.
+    StripSolo { strip: u16 },
+    /// Move a strip fader by `step_db` (±0.5 to ±24).
+    StripGain { strip: u16, step_db: f32 },
+    /// Mute or unmute an output bus.
+    BusMute { bus: String },
+    /// Move a bus fader by `step_db`.
+    BusGain { bus: String, step_db: f32 },
+}
+
+impl HotkeyAction {
+    /// Adjusts for removed strip `i`: later positions move down by one.
+    /// Returns `true` if the action referred to that strip (it is then
+    /// meaningless and should be dropped).
+    pub fn on_strip_removed(&mut self, i: u16) -> bool {
+        match self {
+            Self::StripMute { strip } | Self::StripSolo { strip } | Self::StripGain { strip, .. } => {
+                if *strip == i {
+                    return true;
+                }
+                if *strip > i {
+                    *strip -= 1;
+                }
+                false
+            }
+            Self::BusMute { .. } | Self::BusGain { .. } => false,
+        }
+    }
+
+    /// The bus id this action refers to, if any.
+    #[must_use]
+    pub fn bus(&self) -> Option<&str> {
+        match self {
+            Self::BusMute { bus } | Self::BusGain { bus, .. } => Some(bus),
+            _ => None,
+        }
+    }
 }
 
 impl Default for Config {
@@ -367,6 +478,7 @@ impl Default for Config {
                 mute: false,
                 keep_awake: KeepAwakeConfig::default(),
             }],
+            hotkeys: HotkeysConfig::default(),
         }
     }
 }
@@ -429,6 +541,44 @@ impl Config {
         {
             return invalid(format!("engine.master_bus '{m}' does not exist"));
         }
+        self.validate_hotkeys(&ids)
+    }
+
+    fn validate_hotkeys(&self, bus_ids: &HashSet<&str>) -> Result<(), ConfigError> {
+        let invalid = |m: String| Err(ConfigError::Invalid(m));
+        let h = &self.hotkeys;
+        if let Some(b) = &h.feedback_bus
+            && !bus_ids.contains(b.as_str())
+        {
+            return invalid(format!("hotkeys.feedback_bus '{b}' does not exist"));
+        }
+        if !(h.feedback_level_db.is_finite() && (-60.0..=-6.0).contains(&h.feedback_level_db)) {
+            return invalid(format!("hotkeys.feedback_level_db {} out of range (-60 to -6)", h.feedback_level_db));
+        }
+        let mut seen_ids = HashSet::new();
+        let mut seen_keys = HashSet::new();
+        for b in &h.bindings {
+            if b.id == 0 || !seen_ids.insert(b.id) {
+                return invalid(format!("hotkey id {} is zero or duplicated", b.id));
+            }
+            let combo: mixercraft_hotkey::Combo =
+                b.keys.parse().map_err(|e| ConfigError::Invalid(format!("hotkey {}: {e}", b.id)))?;
+            combo.check_bindable().map_err(|e| ConfigError::Invalid(format!("hotkey {}: {e}", b.id)))?;
+            if !seen_keys.insert(combo) {
+                return invalid(format!("hotkey {combo} is bound twice"));
+            }
+            let step_ok = |s: f32| s.is_finite() && (0.5..=24.0).contains(&s.abs());
+            let strip_ok = |s: u16| usize::from(s) < self.strips.len();
+            let ok = match &b.action {
+                HotkeyAction::StripMute { strip } | HotkeyAction::StripSolo { strip } => strip_ok(*strip),
+                HotkeyAction::StripGain { strip, step_db } => strip_ok(*strip) && step_ok(*step_db),
+                HotkeyAction::BusMute { bus } => bus_ids.contains(bus.as_str()),
+                HotkeyAction::BusGain { bus, step_db } => bus_ids.contains(bus.as_str()) && step_ok(*step_db),
+            };
+            if !ok {
+                return invalid(format!("hotkey {combo} refers to a missing strip or bus or has an invalid step"));
+            }
+        }
         Ok(())
     }
 
@@ -479,6 +629,7 @@ pub fn migrate(doc: toml::Table) -> Result<toml::Table, ConfigError> {
         1 => migrate(migrate_1_to_2(doc)),
         2 => migrate(migrate_2_to_3(doc)),
         3 => migrate(migrate_3_to_4(doc)),
+        4 => migrate(migrate_4_to_5(doc)),
         _ => Ok(doc),
     }
 }
@@ -510,6 +661,14 @@ fn migrate_3_to_4(mut doc: toml::Table) -> toml::Table {
         }
     }
     doc.insert("schema_version".into(), toml::Value::Integer(4));
+    doc
+}
+
+/// Schema 5 added the optional `[hotkeys]` table; its absence means "no
+/// shortcuts", so the upgrade only bumps the version. (Older engines reject
+/// the table, hence the bump.)
+fn migrate_4_to_5(mut doc: toml::Table) -> toml::Table {
+    doc.insert("schema_version".into(), toml::Value::Integer(5));
     doc
 }
 
@@ -687,7 +846,7 @@ comp_amount = 3.0",
         );
         assert!(v3.contains("[buses.keep_awake]"), "test document has a keep-awake table");
         let c = load_str(&v3).unwrap();
-        assert_eq!(c.schema_version, 4);
+        assert_eq!(c.schema_version, CURRENT_SCHEMA_VERSION);
         let ka = c.buses.iter().find(|b| b.keep_awake.enabled).unwrap().keep_awake;
         assert_eq!(ka.mode, KeepAwakeMode::Infrasound, "existing tone keeps its behaviour");
         assert_eq!(ka.interval_s, 240.0);
@@ -695,6 +854,80 @@ comp_amount = 3.0",
         let text = c.to_toml().unwrap();
         assert!(text.contains("mode = \"infrasound\""));
         assert_eq!(load_str(&text).unwrap(), c);
+    }
+
+    #[test]
+    fn schema_4_documents_migrate_to_schema_5_without_hotkeys() {
+        let v4 = EXAMPLE.replace("schema_version = 1", "schema_version = 4");
+        let c = load_str(&v4).unwrap();
+        assert_eq!(c.schema_version, 5);
+        assert!(c.hotkeys.is_default());
+        assert!(!c.to_toml().unwrap().contains("hotkeys"), "no shortcuts: nothing written");
+    }
+
+    fn with_hotkeys() -> Config {
+        let mut c = load_str(EXAMPLE).unwrap();
+        c.hotkeys = HotkeysConfig {
+            feedback_bus: Some("A1".into()),
+            feedback_level_db: -24.0,
+            bindings: vec![
+                HotkeyBinding {
+                    id: 1,
+                    keys: "Ctrl+Alt+M".into(),
+                    mode: HotkeyMode::Toggle,
+                    action: HotkeyAction::StripMute { strip: 0 },
+                },
+                HotkeyBinding {
+                    id: 4,
+                    keys: "F13".into(),
+                    mode: HotkeyMode::Hold,
+                    action: HotkeyAction::StripMute { strip: 1 },
+                },
+                HotkeyBinding {
+                    id: 2,
+                    keys: "Ctrl+Shift+Down".into(),
+                    mode: HotkeyMode::Toggle,
+                    action: HotkeyAction::BusGain { bus: "B1".into(), step_db: -3.0 },
+                },
+            ],
+        };
+        c
+    }
+
+    #[test]
+    fn hotkeys_roundtrip_and_validation() {
+        let c = with_hotkeys();
+        let text = c.to_toml().unwrap();
+        assert!(text.contains("[[hotkeys.bindings]]"), "{text}");
+        assert!(text.contains("feedback_bus = \"A1\""));
+        assert_eq!(load_str(&text).unwrap(), c);
+        assert_eq!(c.hotkeys.next_id(), 5);
+
+        let bad = |f: &dyn Fn(&mut Config)| {
+            let mut c = with_hotkeys();
+            f(&mut c);
+            matches!(c.validate(), Err(ConfigError::Invalid(_)))
+        };
+        assert!(!bad(&|_| {}));
+        assert!(bad(&|c| c.hotkeys.bindings[1].keys = "M".into()), "typing key without modifier");
+        assert!(bad(&|c| c.hotkeys.bindings[1].keys = "Ctrl+Hyper".into()), "unknown key");
+        assert!(bad(&|c| c.hotkeys.bindings[1].keys = "alt+ctrl+m".into()), "same combo twice");
+        assert!(bad(&|c| c.hotkeys.bindings[1].id = 1), "duplicate id");
+        assert!(bad(&|c| c.hotkeys.bindings[0].action = HotkeyAction::StripSolo { strip: 9 }), "missing strip");
+        assert!(bad(&|c| c.hotkeys.bindings[2].action = HotkeyAction::BusMute { bus: "Z".into() }), "missing bus");
+        assert!(bad(&|c| c.hotkeys.bindings[2].action = HotkeyAction::BusGain { bus: "A1".into(), step_db: 0.0 }));
+        assert!(bad(&|c| c.hotkeys.feedback_bus = Some("Z".into())));
+        assert!(bad(&|c| c.hotkeys.feedback_level_db = 0.0));
+    }
+
+    #[test]
+    fn hotkey_strip_positions_follow_removals() {
+        let mut a = HotkeyAction::StripGain { strip: 3, step_db: 1.0 };
+        assert!(!a.on_strip_removed(1));
+        assert_eq!(a, HotkeyAction::StripGain { strip: 2, step_db: 1.0 });
+        assert!(!a.on_strip_removed(5));
+        assert!(a.on_strip_removed(2), "its own strip went away");
+        assert!(!HotkeyAction::BusMute { bus: "A1".into() }.on_strip_removed(0));
     }
 
     #[test]

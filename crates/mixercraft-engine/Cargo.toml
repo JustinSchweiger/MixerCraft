@@ -18,6 +18,7 @@ mixercraft-core.workspace = true
 mixercraft-config.workspace = true
 mixercraft-ipc.workspace = true
 mixercraft-platform.workspace = true
+mixercraft-hotkey.workspace = true
 anyhow.workspace = true
 audio_thread_priority.workspace = true
 clap.workspace = true

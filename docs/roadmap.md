@@ -1,6 +1,6 @@
 # Roadmap and status
 
-Last updated: 2026-11-16. "Verified" means exercised on real hardware.
+Last updated: 2026-11-21. "Verified" means exercised on real hardware.
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -29,7 +29,8 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 4. Per-application capture on Windows (WASAPI process loopback) as an
    input source. Virtual devices: soak test, reboot/sleep behaviour, own
    USB product id.
-5. GUI: global hotkeys; verify the Linux tray on real desktops (KDE, GNOME
+5. GUI: ~~global hotkeys~~ (Windows done, [ADR 0011](adr/0011-global-hotkeys.md);
+   Linux GlobalShortcuts portal / X11 and macOS still open); verify the Linux tray on real desktops (KDE, GNOME
    with AppIndicator); verify the sign-in toggles of the Settings tab at an
    actual sign-in (Windows, Linux, macOS).
 6. Native WASAPI backend for low latency.
@@ -59,6 +60,8 @@ Last updated: 2026-11-16. "Verified" means exercised on real hardware.
 | 2026-11-16 | same | default-device memory (isolated engine, virtual recording device, communications role only) | Chosen as communications default → remembered; engine stopped → Windows fell back to the Scarlett; engine restarted → the virtual device was the default again; Scarlett chosen while the device was present → forgotten; next restart kept the Scarlett. The owner's defaults were unchanged afterwards. |
 | 2026-11-16 | same | Settings tab, isolated debug GUI and engine (no devices: one input with no source, two meter-only buses) | Sample rate, latency and clock-bus changes were saved to the configuration at once and showed the restart banner; Restart engine stopped the engine, waited for it to exit and started it with the same `--config`: it then ran at 44.1 kHz with max-stability and A2 as clock, banner gone. Close button set to "Quit the app" closed only the window (engine kept running); `gui.toml` held both preferences. Sign-in toggles showed "off" matching Task Scheduler; switching them was not exercised (it would register real logon tasks). |
 | 2026-11-16 | Windows 11 Pro 26300, x86_64, usbip-win2 0.9.8.1 installed | none (test engines ran a scratch config: one muted bus on an absent device, software clock) | Installer, round 1: per-user MSI 0.1.0 installed without elevation (files, Start-menu and desktop shortcuts, user PATH entry, usbip-win2 detected). Upgrade to 0.1.1 with the installed GUI and engine running: `close-app` closed both in < 0.5 s, no files-in-use prompt, configuration file unchanged. In-app update: the installed GUI found 9.9.9 on a local HTTP feed, showed "Update available", downloaded and verified the MSI and quit; the MSI left an engine running from another folder alone, upgraded and restarted the GUI. A tampered checksum was rejected and the download deleted. Uninstall removed files, shortcuts, tasks, PATH entry and registry key; configuration kept. Found and fixed: Windows Installer had rewritten the user PATH as REG_SZ. Round 2 (after merging the Settings tab; sign-in start now uses its "MixerCraft" task): install created the task (`--tray`); a sign-in start turned off before an upgrade stayed off, one left on stayed on (fixed: the old package's removal step had deleted it); uninstall removed this installation's tasks and left an engine task of another copy alone. |
+
+| 2026-11-21 | same | isolated test engine (`USERNAME=hktest`, USB/IP port 3296, own config): one input without source, a virtual speaker "HK Speaker" (strip, not routed), bus A2 playing into it, recorded by WASAPI loopback; nothing audible | Global hotkeys: Ctrl+Alt+Shift+F23 (toggle mute of an input) and F22 (hold: mute A1 while held) pressed through the Windows input system (`keybd_event`) while another app had the focus: the engine logged mute, unmute, mute on press and unmute 1.22 s later on release. Recording: four confirmation tones 1.08/1.08/1.23 s apart, each 164 ms at −20.0 dBFS, falling 990 → 660 Hz for mute and rising 660 → 990 Hz for unmute. Bindings added by CLI and GUI (UI Automation: Hotkeys tab, Record, injected Ctrl+Alt+Shift+F20 with the GUI focused, "Mute output", "While held", Save) survived an engine restart; a schema 4 file was saved as schema 5. A second registration of the same keys was reported as "already used". The GUI's first recorder (hook in the GUI process) missed keys while its own window had the focus; recording now runs in a helper process. Not tested: physical key presses, a real game in the foreground, the tone on real speakers. |
 
 ## Test log without audio hardware
 

@@ -3344,6 +3344,7 @@ name = "mixercraft-config"
 version = "0.2.0"
 dependencies = [
  "directories",
+ "mixercraft-hotkey",
  "serde",
  "thiserror 2.0.21",
  "toml 1.2.1+spec-1.1.0",
@@ -3377,6 +3378,7 @@ dependencies = [
  "ctrlc",
  "mixercraft-config",
  "mixercraft-core",
+ "mixercraft-hotkey",
  "mixercraft-ipc",
  "mixercraft-platform",
  "rtrb",
@@ -3392,6 +3394,7 @@ version = "0.2.0"
 dependencies = [
  "ksni",
  "mixercraft-config",
+ "mixercraft-hotkey",
  "mixercraft-ipc",
  "mixercraft-platform",
  "mixercraft-update",
@@ -3402,6 +3405,13 @@ dependencies = [
  "toml 1.2.1+spec-1.1.0",
  "tray-icon",
  "winresource",
+]
+
+[[package]]
+name = "mixercraft-hotkey"
+version = "0.2.0"
+dependencies = [
+ "windows",
 ]
 
 [[package]]

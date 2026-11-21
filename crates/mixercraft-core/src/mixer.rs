@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use crate::buffer::AudioBlock;
 use crate::channel_map::ChannelMap;
+use crate::chime::{Chime, ChimeKind};
 use crate::denoise::Denoiser;
 use crate::dsp::{self, GainShape, SmoothedGain};
 use crate::fx::{FxParams, StripFx};
@@ -127,6 +128,9 @@ pub enum MixerCommand {
     BusKeepAwake { bus: u16, params: KeepAwakeParams },
     /// Plays a bus's keep-awake signal once now.
     BusKeepAwakeTest { bus: u16 },
+    /// Plays a short confirmation tone on a bus (after its fader, so it is
+    /// heard even while the bus is muted).
+    BusChime { bus: u16, kind: ChimeKind, level_db: f32 },
     /// Sets a bus fader (dB).
     BusGain { bus: u16, db: f32 },
     /// Mutes or unmutes a bus.
@@ -165,6 +169,7 @@ struct Bus {
     fader: SmoothedGain,
     meter: Arc<MeterBank>,
     keep_awake: KeepAwake,
+    chime: Chime,
 }
 
 /// Shared handles to every meter of a mixer, for control-side readers.
@@ -225,6 +230,7 @@ impl Mixer {
                     k.set_params(b.keep_awake);
                     k
                 },
+                chime: Chime::new(sample_rate),
             })
             .collect();
         let strips = layout
@@ -373,6 +379,9 @@ impl Mixer {
             MixerCommand::BusKeepAwakeTest { bus } => {
                 self.bus_mut(bus)?.keep_awake.trigger_test();
             }
+            MixerCommand::BusChime { bus, kind, level_db } => {
+                self.bus_mut(bus)?.chime.trigger(kind, level_db);
+            }
             MixerCommand::BusGain { bus, db } => {
                 if db.is_nan() {
                     return Err(MixerError::InvalidGain);
@@ -456,6 +465,7 @@ impl Mixer {
             bus.meter.publish(&bus.output);
             // After the meter: the tone is not program audio.
             bus.keep_awake.process(&mut bus.output);
+            bus.chime.process(&mut bus.output);
         }
         report
     }
@@ -635,6 +645,25 @@ mod tests {
         let r = m.process(4);
         assert_eq!(r.over, 8);
         assert_eq!(m.bus_output(0).channel(0)[0], 1.5);
+    }
+
+    #[test]
+    fn chime_plays_after_the_fader_even_on_a_muted_bus() {
+        let mut m = Mixer::new(&layout(1, 2), 256, SR).unwrap();
+        m.apply(MixerCommand::BusMute { bus: 1, mute: true }).unwrap();
+        m.apply(MixerCommand::BusChime { bus: 1, kind: ChimeKind::Down, level_db: -20.0 }).unwrap();
+        let mut peak = 0.0f32;
+        for _ in 0..20 {
+            fill(&mut m, 0, 0.0, 256);
+            m.process(256);
+            assert!(m.bus_output(0).channel(0).iter().all(|s| *s == 0.0), "only the chosen bus");
+            peak = m.bus_output(1).channel(0).iter().fold(peak, |p, s| p.max(s.abs()));
+        }
+        assert!(peak > 0.05, "tone heard on the muted bus ({peak})");
+        assert_eq!(
+            m.apply(MixerCommand::BusChime { bus: 2, kind: ChimeKind::Up, level_db: -20.0 }),
+            Err(MixerError::NoSuchBus)
+        );
     }
 
     #[test]

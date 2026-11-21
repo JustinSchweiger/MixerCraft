@@ -34,6 +34,7 @@
 | `mixercraft-platform` | Capability model, device discovery, native capture/playback streams | yes (via cpal now; native modules later) |
 | `mixercraft-engine` | `mixercraftd`: supervisor, recovery, clocks, IPC server | no direct OS calls |
 | `mixercraft-cli` | `mixercraft` command-line client | none |
+| `mixercraft-hotkey` | Key combinations, system-wide hotkey listener, key recording ([ADR 0011](../adr/0011-global-hotkeys.md)) | yes (Win32 FFI, opts in to `unsafe`) |
 
 Further crates are added only when they carry their own weight (GUI in phase
 7, updater in phase 9, native virtual-device integrations in phase 5).
@@ -106,6 +107,18 @@ At most 8 clients are served concurrently.
 **Before the engine runs as a Windows service**, the named pipe needs an
 explicit security descriptor that admits only the interactive user(s) it
 serves; the default DACL is acceptable for a per-user process only.
+
+## Global hotkeys
+
+The engine, not the GUI, listens for global hotkeys, because it keeps
+running when the window is closed. `mixercraft-hotkey` runs a thread with a
+Win32 message loop (`RegisterHotKey`, release detected by polling the key
+while it is held) and the engine forwards each press or release into the
+supervisor's request queue as `TriggerHotkey`. The supervisor runs the
+binding's action as an ordinary request (mute, solo or gain, ramped and
+persisted) and then asks the core for a confirmation tone (`chime.rs`) on
+the chosen bus, added after that bus's fader and meter. See
+[ADR 0011](../adr/0011-global-hotkeys.md).
 
 ## Configuration
 
