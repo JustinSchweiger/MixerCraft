@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-21
+
 ### Added
 - Global keyboard shortcuts (Windows): a key combination mutes or unmutes an
   input or output, solos an input or moves a fader, also while a game or
@@ -336,6 +338,7 @@ First release: Windows installer on
   and macOS x86_64, MSRV check, cargo-deny supply-chain checks, Dependabot.
 - Research report, architecture docs, feature matrix, ADRs 0001–0008.
 
-[Unreleased]: https://github.com/JustinSchweiger/MixerCraft/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/JustinSchweiger/MixerCraft/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/JustinSchweiger/MixerCraft/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/JustinSchweiger/MixerCraft/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/JustinSchweiger/MixerCraft/releases/tag/v0.1.0

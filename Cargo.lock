@@ -3327,7 +3327,7 @@ dependencies = [
 
 [[package]]
 name = "mixercraft-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3341,7 +3341,7 @@ dependencies = [
 
 [[package]]
 name = "mixercraft-config"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "directories",
  "mixercraft-hotkey",
@@ -3352,7 +3352,7 @@ dependencies = [
 
 [[package]]
 name = "mixercraft-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "assert_no_alloc",
  "mixercraft-denoise",
@@ -3361,7 +3361,7 @@ dependencies = [
 
 [[package]]
 name = "mixercraft-denoise"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "assert_no_alloc",
  "nnnoiseless",
@@ -3370,7 +3370,7 @@ dependencies = [
 
 [[package]]
 name = "mixercraft-engine"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "audio_thread_priority",
@@ -3390,7 +3390,7 @@ dependencies = [
 
 [[package]]
 name = "mixercraft-gui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ksni",
  "mixercraft-config",
@@ -3409,14 +3409,14 @@ dependencies = [
 
 [[package]]
 name = "mixercraft-hotkey"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "windows",
 ]
 
 [[package]]
 name = "mixercraft-ipc"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "interprocess",
  "serde",
@@ -3426,7 +3426,7 @@ dependencies = [
 
 [[package]]
 name = "mixercraft-platform"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "audio_thread_priority",
  "cpal",
@@ -3438,7 +3438,7 @@ dependencies = [
 
 [[package]]
 name = "mixercraft-update"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "directories",
  "rustls",
@@ -3453,7 +3453,7 @@ dependencies = [
 
 [[package]]
 name = "mixercraft-usbip"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "audio_thread_priority",
  "mixercraft-winaudio",
@@ -3461,7 +3461,7 @@ dependencies = [
 
 [[package]]
 name = "mixercraft-winaudio"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "windows",
  "windows-core",
