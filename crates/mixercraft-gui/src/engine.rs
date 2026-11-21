@@ -48,6 +48,12 @@ pub enum Cmd {
     RenameBus(u16, String),
     /// Stores engine-wide settings (they apply at the next engine start).
     EngineSettings(mixercraft_ipc::EngineSettings),
+    /// Adds (id 0) or replaces a global shortcut.
+    SetHotkey(mixercraft_ipc::Hotkey),
+    RemoveHotkey(u32),
+    HotkeyFeedback(mixercraft_ipc::HotkeyFeedback),
+    /// Runs a shortcut as if its keys were pressed (`true`) or released.
+    TriggerHotkey(u32, bool),
     StartEngine,
     /// Sent by the tray menu (Windows and macOS only).
     #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
@@ -111,6 +117,10 @@ fn request_for(cmd: &Cmd) -> Option<Request> {
         Cmd::RenameStrip(strip, ref name) => Request::RenameStrip { strip, name: name.clone() },
         Cmd::RenameBus(bus, ref name) => Request::RenameBus { bus, name: name.clone() },
         Cmd::EngineSettings(ref settings) => Request::SetEngineSettings { settings: settings.clone() },
+        Cmd::SetHotkey(ref hotkey) => Request::SetHotkey { hotkey: hotkey.clone() },
+        Cmd::RemoveHotkey(id) => Request::RemoveHotkey { id },
+        Cmd::HotkeyFeedback(feedback) => Request::SetHotkeyFeedback { feedback },
+        Cmd::TriggerHotkey(id, pressed) => Request::TriggerHotkey { id, pressed },
         Cmd::StopEngine => Request::Shutdown,
         Cmd::StartEngine | Cmd::RestartEngine => return None,
     })
@@ -221,7 +231,17 @@ pub fn run(rx: &Receiver<Cmd>, deliver: &dyn Fn(Update)) {
                 continue;
             }
             let Some(req) = request_for(&cmd) else { continue };
-            let reshapes = matches!(cmd, Cmd::AddStrip | Cmd::AddBus | Cmd::RemoveStrip(_) | Cmd::RemoveBus(_));
+            let reshapes = matches!(
+                cmd,
+                Cmd::AddStrip
+                    | Cmd::AddBus
+                    | Cmd::RemoveStrip(_)
+                    | Cmd::RemoveBus(_)
+                    | Cmd::SetHotkey(_)
+                    | Cmd::RemoveHotkey(_)
+                    | Cmd::HotkeyFeedback(_)
+                    | Cmd::TriggerHotkey(..)
+            );
             match c.request(&req) {
                 Ok(_) => {
                     if reshapes {

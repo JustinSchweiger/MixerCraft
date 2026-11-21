@@ -15,15 +15,17 @@ distribution, updates 9. Extensibility.
   FIFOs, processing cycle, strip FX/noise suppression, bus keep-awake.
 * `crates/mixercraft-denoise` — vendored RNNoise port (nnnoiseless 0.5.2,
   BSD-3) with allocation-free FFTs; keep it close to upstream.
-* `crates/mixercraft-config` — TOML schema v3, migrations, atomic saves.
+* `crates/mixercraft-config` — TOML schema v5, migrations, atomic saves.
 * `crates/mixercraft-ipc` — NDJSON protocol v1, local socket transport.
 * `crates/mixercraft-platform` — capability model + cpal device I/O +
   virtual devices (`virtual_dev`, ids `virtual:<name>`; Linux: PipeWire
   nodes in `pipewire_dev`, ADR 0009).
 * `crates/mixercraft-usbip` — user-space USB/IP server emulating USB audio
   devices (Windows virtual devices via usbip-win2, ADR 0007).
-* `crates/mixercraft-winaudio` — the only crate with `unsafe` (COM): restores
-  Windows' default devices.
+* `crates/mixercraft-winaudio` — `unsafe` (COM): restores Windows' default
+  devices.
+* `crates/mixercraft-hotkey` — `unsafe` (Win32): key combinations, global
+  hotkey listener used by the engine, key recording (ADR 0011).
 * `crates/mixercraft-engine` — `mixercraftd`: supervisor, recovery, clocks.
 * `crates/mixercraft-cli` — `mixercraft` client.
 * `crates/mixercraft-gui` — desktop mixer (Slint, software renderer). UI in

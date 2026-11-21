@@ -14,6 +14,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod clock;
+mod hotkeys;
 mod supervisor;
 
 use std::path::PathBuf;
@@ -144,6 +145,14 @@ fn main() -> anyhow::Result<()> {
     }
 
     let (ipc_tx, ipc_rx) = mpsc::channel::<IpcCall>();
+    // Global hotkeys arrive as requests in the same queue, so they are
+    // handled at once and exactly like a client request.
+    let hotkey_tx = ipc_tx.clone();
+    let hotkey_listener = mixercraft_hotkey::Listener::start(move |ev| {
+        let (reply, _) = mpsc::sync_channel(1);
+        let request = mixercraft_ipc::Request::TriggerHotkey { id: ev.id, pressed: ev.pressed };
+        let _ = hotkey_tx.send(IpcCall { request, reply });
+    });
     std::thread::Builder::new().name("mixercraft-ipc".into()).spawn(move || {
         mixercraft_ipc::run_server(listener, env!("CARGO_PKG_VERSION").into(), MAX_CLIENTS, move |request| {
             let (reply, answer) = mpsc::sync_channel(1);
@@ -157,7 +166,8 @@ fn main() -> anyhow::Result<()> {
     })?;
     info!(endpoint = %mixercraft_ipc::endpoint_description(), "IPC listening");
 
-    let supervisor = Supervisor::new(config, path, process_start)?;
+    let mut supervisor = Supervisor::new(config, path, process_start)?;
+    supervisor.set_hotkey_listener(hotkey_listener);
     supervisor.run(&shutdown, &ipc_rx);
     info!("stopped");
     Ok(())

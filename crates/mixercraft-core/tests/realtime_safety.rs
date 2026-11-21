@@ -4,6 +4,7 @@
 //! an allocation or deallocation happens inside `assert_no_alloc(|| ..)`.
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
+use mixercraft_core::chime::ChimeKind;
 use mixercraft_core::engine::{Command, engine};
 use mixercraft_core::fifo::{FifoSpec, fifo};
 use mixercraft_core::fx::FxParams;
@@ -78,6 +79,11 @@ fn engine_cycle_with_fifos_and_commands_does_not_allocate() {
                 KeepAwakeParams { enabled: i % 200 != 0, mode, level_db: -40.0, frequency_hz: 12.0, interval_s: 30.0 };
             handle.send(Command::Mixer(MixerCommand::BusKeepAwake { bus: 1, params: keep_awake })).unwrap();
             handle.send(Command::Mixer(MixerCommand::BusKeepAwakeTest { bus: 1 })).unwrap();
+            // Hotkey confirmation tones, also on the master bus and while it
+            // is muted (the tone is added after the fader).
+            let kind = if i % 100 == 0 { ChimeKind::Up } else { ChimeKind::Down };
+            handle.send(Command::Mixer(MixerCommand::BusMute { bus: 0, mute: i % 100 == 0 })).unwrap();
+            handle.send(Command::Mixer(MixerCommand::BusChime { bus: i as u16 % 2, kind, level_db: -20.0 })).unwrap();
         }
         assert_no_alloc(|| {
             in_w.write(&input);

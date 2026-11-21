@@ -4,9 +4,10 @@ import { MixerView, StripView, MeterView } from "mixer.slint";
 import { DiagnosticsView, DeviceRow } from "diagnostics.slint";
 import { AboutView, UpdateView } from "about.slint";
 import { SettingsView, SettingsState, SettingKind } from "settings.slint";
+import { HotkeysView, HotkeysState, HotkeyEvent, HotkeyRow, HotkeyEditor } from "hotkeys.slint";
 import { ScrollView } from "std-widgets.slint";
 
-export { StripView, MeterView, DeviceRow, SettingsState, SettingKind, UpdateView }
+export { StripView, MeterView, DeviceRow, SettingsState, SettingKind, UpdateView, HotkeysState, HotkeyEvent, HotkeyRow, HotkeyEditor }
 
 // Invisible edge or corner that resizes the frameless window.
 // dir: 0 N, 1 S, 2 E, 3 W, 4 NE, 5 NW, 6 SE, 7 SW.
@@ -65,6 +66,7 @@ component TitleBar inherits Rectangle {
                 spacing: 6px;
                 PillButton { text: "Mixer"; active: root.tab == 0; clicked => { root.tab-selected(0); } }
                 PillButton { text: "Diagnostics"; active: root.tab == 1; clicked => { root.tab-selected(1); } }
+                PillButton { text: "Hotkeys"; active: root.tab == 4; clicked => { root.tab-selected(4); } }
                 PillButton { text: "Settings"; active: root.tab == 3; clicked => { root.tab-selected(3); } }
                 PillButton { text: "About"; active: root.tab == 2; clicked => { root.tab-selected(2); } }
             }
@@ -147,6 +149,8 @@ export component MainWindow inherits Window {
     in property <string> engine-line;
     in property <SettingsState> settings;
     callback setting-changed(SettingKind, int);
+    in property <HotkeysState> hotkeys;
+    callback hotkey-event(HotkeyEvent, int);
 
     callback strip-gain(int, float);
     callback strip-mute(int);
@@ -229,6 +233,13 @@ export component MainWindow inherits Window {
                     state: root.settings;
                     connected: root.connected;
                     changed(kind, value) => { root.setting-changed(kind, value); }
+                }
+
+                if root.tab == 4: HotkeysView {
+                    vertical-stretch: 1;
+                    state: root.hotkeys;
+                    connected: root.connected;
+                    event(kind, value) => { root.hotkey-event(kind, value); }
                 }
 
                 if (root.tab == 0 || root.tab == 1) && !root.connected: Rectangle {

@@ -41,11 +41,13 @@ pub enum Feature {
     SessionAutostart,
     /// In-app update installation.
     InAppUpdates,
+    /// Keyboard shortcuts that work while another application has the focus.
+    GlobalHotkeys,
 }
 
 impl Feature {
     /// All features, for building the UI and diagnostics tables.
-    pub const ALL: [Feature; 8] = [
+    pub const ALL: [Feature; 9] = [
         Feature::PhysicalIo,
         Feature::MultiDeviceClockSync,
         Feature::FollowDefaultDevice,
@@ -54,6 +56,7 @@ impl Feature {
         Feature::PreLoginEngine,
         Feature::SessionAutostart,
         Feature::InAppUpdates,
+        Feature::GlobalHotkeys,
     ];
 
     /// Short display name.
@@ -68,6 +71,7 @@ impl Feature {
             Self::PreLoginEngine => "Engine before login",
             Self::SessionAutostart => "Autostart with session",
             Self::InAppUpdates => "In-app updates",
+            Self::GlobalHotkeys => "Global hotkeys",
         }
     }
 }
@@ -86,7 +90,31 @@ pub fn support(feature: Feature) -> (Support, &'static str) {
         F::PreLoginEngine => pre_login(),
         F::SessionAutostart => session_autostart(),
         F::InAppUpdates => in_app_updates(),
+        F::GlobalHotkeys => global_hotkeys(),
     }
+}
+
+#[cfg(windows)]
+fn global_hotkeys() -> (Support, &'static str) {
+    (
+        Support::Partial,
+        "System-wide RegisterHotKey in the engine; a combination another application already uses cannot be bound",
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn global_hotkeys() -> (Support, &'static str) {
+    (Support::Planned, "Needs the XDG GlobalShortcuts portal (Wayland) or XGrabKey (X11); not implemented yet")
+}
+
+#[cfg(target_os = "macos")]
+fn global_hotkeys() -> (Support, &'static str) {
+    (Support::Planned, "Needs Carbon RegisterEventHotKey in the engine; not implemented yet")
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+fn global_hotkeys() -> (Support, &'static str) {
+    (Support::Unsupported, "No global shortcut mechanism on this platform")
 }
 
 #[cfg(windows)]

@@ -6,6 +6,7 @@ members = [
     "crates/mixercraft-ipc",
     "crates/mixercraft-usbip",
     "crates/mixercraft-winaudio",
+    "crates/mixercraft-hotkey",
     "crates/mixercraft-denoise",
     "crates/mixercraft-platform",
     "crates/mixercraft-engine",
@@ -31,6 +32,7 @@ mixercraft-ipc = { path = "crates/mixercraft-ipc" }
 mixercraft-platform = { path = "crates/mixercraft-platform" }
 mixercraft-usbip = { path = "crates/mixercraft-usbip" }
 mixercraft-winaudio = { path = "crates/mixercraft-winaudio" }
+mixercraft-hotkey = { path = "crates/mixercraft-hotkey" }
 mixercraft-denoise = { path = "crates/mixercraft-denoise" }
 mixercraft-update = { path = "crates/mixercraft-update" }
 

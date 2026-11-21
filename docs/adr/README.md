@@ -16,5 +16,6 @@ mind is a new record that supersedes the old one.
 | [0008](0008-license.md) | Project license (MIT OR Apache-2.0) | Accepted |
 | [0009](0009-linux-virtual-devices.md) | Linux virtual devices as PipeWire stream nodes | Accepted |
 | [0010](0010-macos-virtual-devices.md) | macOS virtual devices: loopback Audio Server Plug-in | Proposed |
+| [0011](0011-global-hotkeys.md) | Global hotkeys in the engine | Accepted (Windows) |
 
 Template: copy an existing record, keep it short, link evidence.

@@ -93,6 +93,15 @@ pub enum Request {
     SetEngineSettings { settings: EngineSettings },
     /// Asks the engine to stop gracefully.
     Shutdown,
+    /// Adds (`hotkey.id == 0`) or replaces a global keyboard shortcut.
+    SetHotkey { hotkey: Hotkey },
+    /// Removes a global keyboard shortcut.
+    RemoveHotkey { id: u32 },
+    /// Sets the confirmation tone played when a shortcut fires.
+    SetHotkeyFeedback { feedback: HotkeyFeedback },
+    /// Runs a shortcut's action as if its keys were pressed (`pressed:
+    /// true`) or released. Also how the engine's own key listener reports.
+    TriggerHotkey { id: u32, pressed: bool },
 }
 
 /// The engine's answer to a [`Request`].
@@ -186,6 +195,101 @@ pub struct EngineStatus {
     pub restart_required: bool,
     /// The configuration file the engine loads and saves (empty if none).
     pub config_path: String,
+    /// Global keyboard shortcuts. `None`: the engine predates them.
+    pub hotkeys: Option<HotkeysStatus>,
+}
+
+/// A global keyboard shortcut.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Hotkey {
+    /// Stable id; 0 in [`Request::SetHotkey`] adds a new shortcut.
+    pub id: u32,
+    /// Key combination such as `"Ctrl+Alt+M"`.
+    pub keys: String,
+    pub mode: HotkeyMode,
+    pub action: HotkeyAction,
+}
+
+/// How a shortcut acts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum HotkeyMode {
+    /// Each press switches.
+    #[default]
+    Toggle,
+    /// Switches while held and back on release (push-to-talk on a muted
+    /// strip, push-to-mute on an open one). Gain steps ignore it.
+    Hold,
+}
+
+/// What a shortcut does (strips and buses by index, like other requests).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HotkeyAction {
+    StripMute {
+        strip: u16,
+    },
+    StripSolo {
+        strip: u16,
+    },
+    /// Moves the fader by `step_db` (±0.5 to ±24).
+    StripGain {
+        strip: u16,
+        step_db: f32,
+    },
+    BusMute {
+        bus: u16,
+    },
+    BusGain {
+        bus: u16,
+        step_db: f32,
+    },
+}
+
+impl Default for HotkeyAction {
+    fn default() -> Self {
+        Self::StripMute { strip: 0 }
+    }
+}
+
+/// Confirmation tone of shortcuts.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HotkeyFeedback {
+    /// Bus that plays the tone; `None`: no tone.
+    pub bus: Option<u16>,
+    /// Tone level (dBFS peak), -60 to -6.
+    pub level_db: f32,
+}
+
+impl Default for HotkeyFeedback {
+    fn default() -> Self {
+        Self { bus: None, level_db: -20.0 }
+    }
+}
+
+/// A shortcut and whether the system accepted its keys.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct HotkeyStatus {
+    pub hotkey: Hotkey,
+    /// The keys are registered and fire in the background.
+    pub active: bool,
+    /// Why not (e.g. another application uses the combination).
+    pub error: Option<String>,
+}
+
+/// Global keyboard shortcuts of the engine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct HotkeysStatus {
+    /// Global shortcuts work on this platform and the listener runs.
+    pub available: bool,
+    /// Why they do not (empty when they do).
+    pub note: String,
+    pub bindings: Vec<HotkeyStatus>,
+    pub feedback: HotkeyFeedback,
 }
 
 /// State of one opened device stream.
@@ -820,6 +924,34 @@ mod tests {
         // Engines before the settings fields are recognisable.
         assert_eq!(s.settings, None);
         assert!(!s.restart_required);
+        // ... and those before hotkeys.
+        assert_eq!(s.hotkeys, None);
+    }
+
+    #[test]
+    fn hotkey_requests_have_stable_wire_format() {
+        let hotkey = Hotkey {
+            id: 0,
+            keys: "Ctrl+Alt+M".into(),
+            mode: HotkeyMode::Hold,
+            action: HotkeyAction::BusGain { bus: 1, step_db: -3.0 },
+        };
+        let json = serde_json::to_string(&Request::SetHotkey { hotkey }).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"set_hotkey","hotkey":{"id":0,"keys":"Ctrl+Alt+M","mode":"hold","action":{"kind":"bus_gain","bus":1,"step_db":-3.0}}}"#
+        );
+        let json = serde_json::to_string(&Request::TriggerHotkey { id: 3, pressed: true }).unwrap();
+        assert_eq!(json, r#"{"type":"trigger_hotkey","id":3,"pressed":true}"#);
+        let feedback = HotkeyFeedback { bus: Some(0), level_db: -18.0 };
+        let json = serde_json::to_string(&Request::SetHotkeyFeedback { feedback }).unwrap();
+        assert_eq!(json, r#"{"type":"set_hotkey_feedback","feedback":{"bus":0,"level_db":-18.0}}"#);
+        let r: Request = serde_json::from_str(
+            r#"{"type":"set_hotkey","hotkey":{"keys":"F13","action":{"kind":"strip_mute","strip":2}}}"#,
+        )
+        .unwrap();
+        let Request::SetHotkey { hotkey } = r else { panic!() };
+        assert_eq!((hotkey.id, hotkey.mode), (0, HotkeyMode::Toggle), "defaults for omitted fields");
     }
 
     #[test]

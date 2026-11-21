@@ -124,7 +124,7 @@ export component Segmented inherits Rectangle {
     }
 }
 
-component Section inherits Rectangle {
+export component Section inherits Rectangle {
     in property <string> title;
     border-radius: 10px;
     background: Theme.section;
@@ -140,7 +140,7 @@ component Section inherits Rectangle {
 }
 
 // A setting: title and explanation on the left, its control on the right.
-component Row inherits HorizontalLayout {
+export component Row inherits HorizontalLayout {
     in property <string> title;
     in property <string> detail;
     in property <color> detail-color: Theme.text-dim;
@@ -164,7 +164,7 @@ component Row inherits HorizontalLayout {
     }
 }
 
-component Divider inherits Rectangle {
+export component Divider inherits Rectangle {
     height: 1px;
     background: Theme.section-border;
 }
