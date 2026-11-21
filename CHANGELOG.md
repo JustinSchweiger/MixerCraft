@@ -34,6 +34,22 @@ All notable changes to this project are documented here. The format follows
   usbip-win2's low-latency receive mode (when the installed usbip-win2 has
   it): late requests dropped from 14 to 1-4 a minute under the same game
   load, about as even as a real USB speaker.
+- Windows: virtual devices stopped working after "Shut down" with Fast
+  Startup on (the Windows default). Fast Startup signs the user out and
+  hibernates Windows itself; Windows dropped the virtual devices while the
+  engine was still running, the engine reconnected them half a second
+  later, and Windows saved copies it had not finished removing. After the
+  next start every application got "device invalidated" (no sound into or
+  out of MixerCraft) until a real restart, while MixerCraft showed the
+  devices as running. The engine now notices sign-out and shutdown (a
+  hidden window; it was ended without notice before), unplugs its virtual
+  devices itself, waits until Windows has removed them and connects
+  nothing any more. It also connects nothing while the system goes to
+  sleep (and for 3 s after waking), waits until Windows has removed a
+  device's old copy before connecting it again, and checks that Windows
+  really detected the device anew; if Windows still holds an old copy, the
+  device is reported as failed with a message that says to restart
+  Windows.
 
 ## [0.2.0] - 2026-11-17
 
