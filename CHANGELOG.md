@@ -6,7 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.3.1] - 2026-11-22
+## [0.3.2] - 2026-11-22
+
+0.3.1 was tagged but never published (a release mistake); 0.3.2 has the
+same content.
 
 ### Fixed
 - Windows: virtual devices still stopped working after "Shut down" with
@@ -358,8 +361,8 @@ First release: Windows installer on
   and macOS x86_64, MSRV check, cargo-deny supply-chain checks, Dependabot.
 - Research report, architecture docs, feature matrix, ADRs 0001–0008.
 
-[Unreleased]: https://github.com/JustinSchweiger/MixerCraft/compare/v0.3.1...HEAD
-[0.3.1]: https://github.com/JustinSchweiger/MixerCraft/compare/v0.3.0...v0.3.1
+[Unreleased]: https://github.com/JustinSchweiger/MixerCraft/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/JustinSchweiger/MixerCraft/compare/v0.3.0...v0.3.2
 [0.3.0]: https://github.com/JustinSchweiger/MixerCraft/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/JustinSchweiger/MixerCraft/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/JustinSchweiger/MixerCraft/releases/tag/v0.1.0
