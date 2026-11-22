@@ -19,6 +19,7 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 /// Name of the task in Task Scheduler.
 pub const TASK_NAME: &str = "MixerCraft Repair Virtual Devices";
@@ -143,6 +144,53 @@ pub fn run() -> Result<(), String> {
     run_tool("schtasks", &["/Run", "/TN", TASK_NAME]).map(|_| ())
 }
 
+/// Task Scheduler's result while the task runs (`SCHED_S_TASK_RUNNING`).
+pub const STILL_RUNNING: i64 = 267_009;
+
+/// Whether pnputil's exit code means the restart finishes only when Windows
+/// restarts: 3010 ("reboot required"; seen on hardware when the audio engine
+/// still had a device open), 50 (asked again while that is pending).
+#[must_use]
+pub const fn needs_windows_restart(code: i64) -> bool {
+    code == 3010 || code == 50
+}
+
+/// Last run time (as Task Scheduler prints it) and last result from
+/// `schtasks /Query /V /FO CSV /NH`. The first seven columns are fixed and
+/// contain no quotes (later ones may, e.g. the command).
+#[must_use]
+pub fn parse_last_run(csv: &str) -> Option<(String, i64)> {
+    let line = csv.lines().find(|l| l.starts_with('"'))?;
+    let fields: Vec<&str> = line.trim_start_matches('"').splitn(8, "\",\"").collect();
+    let (time, code) = (fields.get(5)?, fields.get(6)?);
+    Some(((*time).to_owned(), code.trim().parse().ok()?))
+}
+
+fn last_run() -> Option<(String, i64)> {
+    parse_last_run(&run_tool("schtasks", &["/Query", "/TN", TASK_NAME, "/V", "/FO", "CSV", "/NH"]).ok()?)
+}
+
+/// Starts the helper task and waits until it has finished; returns
+/// pnputil's exit code (0: the controller restarted).
+///
+/// # Errors
+/// If the task cannot be started or does not finish within `timeout`.
+pub fn run_and_wait(timeout: Duration) -> Result<i64, String> {
+    let before = last_run().map(|(time, _)| time);
+    run()?;
+    let until = Instant::now() + timeout;
+    while Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(500));
+        if let Some((time, code)) = last_run()
+            && Some(&time) != before.as_ref()
+            && code != STILL_RUNNING
+        {
+            return Ok(code);
+        }
+    }
+    Err("the repair helper did not finish in time".into())
+}
+
 /// Registers the helper task for the user `sid`. Needs administrator rights.
 ///
 /// # Errors
@@ -220,6 +268,15 @@ mod tests {
         let csv = "\"desktop\\justin\",\"S-1-5-21-111-222-333-1001\"\r\n";
         assert_eq!(sid_of_whoami(csv).as_deref(), Some("S-1-5-21-111-222-333-1001"));
         assert_eq!(sid_of_whoami("garbage"), None);
+    }
+
+    #[test]
+    fn task_results_are_read_from_the_csv() {
+        // A German Windows (owner's PC); the command column contains quotes.
+        let csv = r#""DESKTOP","\MixerCraft Repair Virtual Devices","Nicht zutreffend","Bereit","Interaktiv/Hintergrund","22.11.2026 13:37:14","50","Nicht zutreffend","%SystemRoot%\System32\pnputil.exe /restart-device /deviceid "ROOT\USBIP_WIN2\UDE"","Nicht zutreffend""#;
+        assert_eq!(parse_last_run(csv), Some(("22.11.2026 13:37:14".into(), 50)));
+        assert_eq!(parse_last_run("garbage"), None);
+        assert!(needs_windows_restart(3010) && needs_windows_restart(50) && !needs_windows_restart(0));
     }
 
     #[test]

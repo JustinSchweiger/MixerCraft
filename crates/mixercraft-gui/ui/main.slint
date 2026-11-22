@@ -130,7 +130,7 @@ export component MainWindow inherits Window {
     in property <string> notice;
     // Virtual devices blocked by stale copies (Windows, after Fast Startup):
     // 0 none, 1 blocked and no repair helper, 2 repairing, 3 still blocked
-    // after a repair.
+    // after a repair, 4 Windows must restart to finish the repair.
     in property <int> repair-state: 0;
     // Waiting for the administrator prompt.
     in property <bool> repair-busy;
@@ -241,7 +241,9 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                             wrap: word-wrap;
                             color: Theme.text;
-                            text: root.repair-state == 2
+                            text: root.repair-state == 4
+                                ? "Windows finishes repairing the virtual devices only when it restarts. Restart Windows (Restart, not Shut down)."
+                                : root.repair-state == 2
                                 ? "Repairing the virtual devices: restarting the virtual USB controller…"
                                 : root.repair-state == 3
                                 ? "Windows still holds stale copies of the virtual devices. Restart Windows (Restart, not Shut down)."

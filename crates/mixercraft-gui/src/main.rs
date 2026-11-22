@@ -416,6 +416,7 @@ fn sync_rows(current: ModelRc<StripView>, fresh: Vec<StripView>, bus: bool) -> O
 /// What the repair banner shows (see `repair-state` in `main.slint`).
 fn repair_state(r: Option<mixercraft_ipc::VirtualRepair>) -> i32 {
     match r {
+        Some(r) if r.restart_pending => 4,
         Some(r) if r.repairing => 2,
         Some(r) if r.stale_copies && r.helper_installed => 3,
         Some(r) if r.stale_copies => 1,

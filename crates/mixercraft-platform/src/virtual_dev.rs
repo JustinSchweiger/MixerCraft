@@ -200,10 +200,18 @@ impl Virtual {
         })
         .ok();
         let session = watch_session(Arc::clone(&power), Arc::downgrade(&server));
+        let worker_server = Arc::downgrade(&server);
         std::thread::Builder::new()
             .name("mixercraft-virtual-attach".into())
             .spawn(move || {
-                attach_worker(&rx, &worker_labels, &worker_changed, DefaultMemory::load(memory_file), &power);
+                attach_worker(
+                    &rx,
+                    &worker_labels,
+                    &worker_changed,
+                    DefaultMemory::load(memory_file),
+                    &power,
+                    &worker_server,
+                );
             })
             .map_err(|e| e.to_string())?;
         Ok(Self { server, jobs, labels, labels_changed, _power: watch, _session: session })
@@ -418,6 +426,24 @@ administrator rights; afterwards MixerCraft repairs this by itself), or restart 
 const STUCK_AFTER_REPAIR: &str = "Windows still holds an earlier copy of this virtual device although MixerCraft \
 restarted the virtual USB controller, so applications cannot use it. Restart Windows (Restart, not Shut \
 down); MixerCraft keeps trying meanwhile.";
+const RESTART_PENDING: &str = "Windows finishes restarting the virtual USB controller only when it restarts: \
+restart Windows (Restart, not Shut down) to get the virtual devices back.";
+/// Longest wait for Windows to remove the devices unplugged before a repair.
+const UNPLUG_WAIT: Duration = Duration::from_secs(5);
+/// Longest wait for the repair helper to finish.
+const HELPER_WAIT: Duration = Duration::from_secs(60);
+
+/// The message for a device that stays blocked.
+fn stuck_message() -> &'static str {
+    let h = health();
+    if h.status.restart_pending {
+        RESTART_PENDING
+    } else if h.last_repair.is_some() {
+        STUCK_AFTER_REPAIR
+    } else {
+        STUCK_NO_HELPER
+    }
+}
 
 /// What the engine knows about virtual devices blocked by stale copies.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -428,6 +454,8 @@ pub struct RepairStatus {
     pub helper_installed: bool,
     /// A repair is under way.
     pub repairing: bool,
+    /// The controller restart finishes only when Windows restarts.
+    pub restart_pending: bool,
 }
 
 #[derive(Default)]
@@ -441,7 +469,7 @@ struct Health {
 }
 
 static HEALTH: Mutex<Health> = Mutex::new(Health {
-    status: RepairStatus { stale_copies: false, helper_installed: false, repairing: false },
+    status: RepairStatus { stale_copies: false, helper_installed: false, repairing: false, restart_pending: false },
     helper_checked: None,
     repair_requested: false,
     last_repair: None,
@@ -489,7 +517,9 @@ fn after_pass(stale: bool, renewed: bool, now: Instant) -> bool {
         h.helper_checked = Some(now);
     }
     let requested = std::mem::take(&mut h.repair_requested) && h.status.helper_installed && !repairing;
-    let start = requested || repair_due(stale, h.status.helper_installed, h.last_repair, repairing, now);
+    // Another restart cannot help until Windows has restarted.
+    let start = !h.status.restart_pending
+        && (requested || repair_due(stale, h.status.helper_installed, h.last_repair, repairing, now));
     if start {
         h.last_repair = Some(now);
         h.repairing_until = Some(now + REPAIR_WINDOW);
@@ -714,6 +744,7 @@ fn attach_worker(
     labels_changed: &AtomicBool,
     mut memory: DefaultMemory,
     power: &Mutex<PowerState>,
+    server: &Weak<Server>,
 ) {
     let mut watched: Vec<Watched> = Vec::new();
     let mut pending: Vec<Pending> = Vec::new();
@@ -755,7 +786,7 @@ fn attach_worker(
                     // Give a repair its chance before giving up.
                     Readiness::Stuck if in_repair => pending.push(p),
                     Readiness::Stuck => {
-                        let message = if health().last_repair.is_some() { STUCK_AFTER_REPAIR } else { STUCK_NO_HELPER };
+                        let message = stuck_message();
                         (p.job.on_error)(StreamFault { kind: FaultKind::DeviceLost, message: message.into() });
                     }
                     Readiness::Attach => {
@@ -814,7 +845,7 @@ fn attach_worker(
                         w.renewed = true;
                         renewed = true;
                     } else if w.since.elapsed() > IMPORT_TIMEOUT && !repairing(Instant::now()) {
-                        let message = if health().last_repair.is_some() { STUCK_AFTER_REPAIR } else { STUCK_NO_HELPER };
+                        let message = stuck_message();
                         (w.on_error)(StreamFault { kind: FaultKind::DeviceLost, message: message.into() });
                         return false;
                     } else if w.since.elapsed() >= STALE_AFTER {
@@ -834,17 +865,33 @@ fn attach_worker(
             false
         });
         if after_pass(stale, renewed, Instant::now()) {
-            // Windows drops every device on the controller; the blocked ones
+            // Unplug our own devices first and let Windows remove them:
+            // Windows refuses to restart the controller while an application
+            // (the audio engine) has a device on it open, and then finishes
+            // the restart only when Windows restarts (seen on hardware).
+            // Nothing is connected until the helper has finished.
+            let unplugged = server.upgrade().map(|s| s.unplug_all()).unwrap_or_default();
+            wait_until_removed(&unplugged, UNPLUG_WAIT);
+            let result = repair::run_and_wait(HELPER_WAIT);
+            let mut h = health();
+            match result {
+                Ok(0) => h.repairing_until = Some(Instant::now() + REPAIR_WINDOW),
+                Ok(code) => {
+                    h.repairing_until = None;
+                    h.status.restart_pending = repair::needs_windows_restart(code);
+                }
+                // Removed or not startable: the blocked devices report it.
+                Err(_) => {
+                    h.repairing_until = None;
+                    h.helper_checked = None;
+                }
+            }
+            h.status.repairing = h.repairing_until.is_some();
+            drop(h);
+            // Every device on the controller was dropped; the blocked ones
             // get a fresh 20 s to come back before they are reported.
             for p in &mut pending {
                 p.waiting_since = None;
-            }
-            if repair::run().is_err() {
-                // Removed or not startable: the blocked devices report it.
-                let mut h = health();
-                h.repairing_until = None;
-                h.status.repairing = false;
-                h.status.helper_installed = false;
             }
         }
     }

@@ -1529,6 +1529,7 @@ impl Supervisor {
                 stale_copies: r.stale_copies,
                 helper_installed: r.helper_installed,
                 repairing: r.repairing,
+                restart_pending: r.restart_pending,
             }),
         }
     }

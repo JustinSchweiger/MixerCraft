@@ -219,6 +219,8 @@ pub struct VirtualRepair {
     pub helper_installed: bool,
     /// A repair is under way.
     pub repairing: bool,
+    /// Windows finishes the controller restart only when it restarts.
+    pub restart_pending: bool,
 }
 
 /// A global keyboard shortcut.

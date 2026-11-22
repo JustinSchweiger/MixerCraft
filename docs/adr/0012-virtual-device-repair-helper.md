@@ -41,10 +41,22 @@ Findings on hardware (2026-11-17 to 2026-11-22, details in
 
 When the attach worker sees a virtual device blocked (its old copy stays
 present for 3 s, or Windows does not detect it again after an attach), the
-engine starts a Task Scheduler task, **"MixerCraft Repair Virtual
-Devices"**, which runs exactly that `pnputil` command as SYSTEM. While the
-controller restarts (30 s window) failed attaches are retried quietly
-every second; automatic repairs are at most one per 2 minutes.
+engine first unplugs its own connected devices and waits (up to 5 s) until
+Windows has removed them, then starts a Task Scheduler task, **"MixerCraft
+Repair Virtual Devices"**, which runs exactly that `pnputil` command as
+SYSTEM, and waits for its result (the task's last result is pnputil's exit
+code). Nothing is connected meanwhile. After success, failed attaches are
+retried quietly every second for 30 s; automatic repairs are at most one
+per 2 minutes. Exit code 3010 or 50 means Windows finishes the restart only
+when it restarts: the engine then stops repairing and says so.
+
+Unplugging first matters: a repair started while the devices were in use
+(2026-11-22, test) was vetoed by the Windows audio engine
+(`Kernel-PnP` 1000/225: `audiodg.exe`, veto type "outstanding open" on the
+Browser device); Windows removed the devices but left the controller in
+`DN_NEED_RESTART` until a restart, and pnputil, disable and enable all
+answered "a system restart is pending". Unplugged devices are removed
+without asking anyone (surprise removal, 110 ms with a client playing).
 
 The task is set up once with administrator rights: the app's banner
 ("Repair") or `mixercraft repair-helper install`, which re-runs the CLI

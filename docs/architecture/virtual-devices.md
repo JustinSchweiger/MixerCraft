@@ -90,8 +90,12 @@ Chosen because it costs nothing and needs no kernel code of our own
      counts as blocked. The worker then starts the repair helper
      (`crate::repair`: Task Scheduler task "MixerCraft Repair Virtual
      Devices", that `pnputil` command as SYSTEM, startable by the user who
-     set it up), at most every 2 minutes, and retries failed attaches
-     quietly for 30 s while the controller restarts.
+     set it up), at most every 2 minutes. Before that it unplugs its own
+     devices and waits for Windows to remove them (an open device makes the
+     audio engine veto the restart, which then waits for a Windows restart),
+     waits for the task's result, and afterwards retries failed attaches
+     quietly for 30 s. Results 3010/50 ("restart pending") stop further
+     repairs and are reported.
   2. Without the helper, a blocked device is reported as failed after 20 s
      with a message that says how to set it up; the status
      (`EngineStatus::virtual_repair`) makes the app show a Repair banner.

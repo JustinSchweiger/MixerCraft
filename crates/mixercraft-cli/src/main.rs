@@ -581,8 +581,13 @@ fn main() -> anyhow::Result<()> {
                 s.overloads,
                 s.skipped_cycles
             );
-            if let Some(r) = s.virtual_repair.filter(|r| r.stale_copies || r.repairing) {
-                if r.repairing {
+            if let Some(r) = s.virtual_repair.filter(|r| r.stale_copies || r.repairing || r.restart_pending) {
+                if r.restart_pending {
+                    println!(
+                        "virtual devices: Windows finishes the repair only when it restarts; \
+                         restart Windows (Restart, not Shut down)"
+                    );
+                } else if r.repairing {
                     println!("virtual devices: repairing (restarting the virtual USB controller)");
                 } else if r.helper_installed {
                     println!("virtual devices: Windows holds stale copies; the repair did not clear them");
