@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-22
+
 ### Fixed
 - Windows: virtual devices still stopped working after "Shut down" with
   Fast Startup on. The fix in 0.3.0 (unplugging them at sign-out) did not
@@ -19,6 +21,10 @@ All notable changes to this project are documented here. The format follows
   back within seconds with their usual identities (apps keep their device
   assignments). Also `mixercraft repair-helper install` and `mixercraft
   repair`. See ADR 0012.
+
+### Security
+- Updated `url` to 2.5.9 (RUSTSEC-2026-0592: stack overflow on nested
+  `blob:` URLs; a dependency of the GUI toolkit).
 
 ## [0.3.0] - 2026-11-21
 
@@ -352,7 +358,8 @@ First release: Windows installer on
   and macOS x86_64, MSRV check, cargo-deny supply-chain checks, Dependabot.
 - Research report, architecture docs, feature matrix, ADRs 0001–0008.
 
-[Unreleased]: https://github.com/JustinSchweiger/MixerCraft/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/JustinSchweiger/MixerCraft/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/JustinSchweiger/MixerCraft/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/JustinSchweiger/MixerCraft/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/JustinSchweiger/MixerCraft/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/JustinSchweiger/MixerCraft/releases/tag/v0.1.0
