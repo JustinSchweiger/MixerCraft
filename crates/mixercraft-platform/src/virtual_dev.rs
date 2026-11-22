@@ -25,18 +25,21 @@
 //! way renaming in the Sound settings does.
 //!
 //! Windows must remove a device's old copy before it can detect the device
-//! again. When the user shut down (which Fast Startup turns into a
-//! hibernation of Windows itself), Windows dropped the devices while the
-//! engine was still running, the engine reconnected them half a second
-//! later, and Windows saved its state with copies it never removed: after
-//! the next start every application got "device invalidated" until a real
-//! restart (seen twice on hardware). So when the session ends (sign-out,
-//! shutdown) the engine unplugs its devices itself, waits until Windows has
-//! removed them, and connects nothing any more; it also connects nothing
-//! while the system sleeps. The worker waits until an old copy is gone
-//! before connecting a device and checks that Windows really detected it
-//! again; otherwise it reports the device as failed with a message that
-//! says what to do.
+//! again. After "Shut down" with Fast Startup (sign-out plus hibernation of
+//! Windows itself), usbip-win2 starts with an empty port table while
+//! Windows still has the previous session's devices plugged into the
+//! virtual hub: applications get "device invalidated", and new devices on
+//! those ports are ignored (seen on hardware, also with the clean unplug at
+//! session end below). The worker notices this (a device whose old copy
+//! does not go away, or that Windows does not detect again) and runs the
+//! repair helper ([`crate::repair`]), which restarts usbip-win2's virtual
+//! USB controller; Windows then drops the old copies and the devices come
+//! back with their identities. Without the helper the device is reported as
+//! failed with a message that says how to set it up.
+//!
+//! The engine also unplugs its devices at sign-out and shutdown and
+//! connects nothing while the system sleeps, so it never reconnects while
+//! Windows is saving its state.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -49,7 +52,7 @@ use std::time::{Duration, Instant, SystemTime};
 use mixercraft_usbip::{AudioPort, DeviceHandle, DeviceSpec, DeviceWatch, Direction, Server, descriptors};
 use mixercraft_winaudio::{DeviceState, PowerEvent, PowerWatch, SessionEvent, SessionWatch};
 
-use crate::{DeviceSelector, FaultKind, PlatformError, StreamFault, StreamInfo};
+use crate::{DeviceSelector, FaultKind, PlatformError, StreamFault, StreamInfo, repair};
 
 /// Device ids of virtual devices start with this.
 pub const ID_PREFIX: &str = "virtual:";
@@ -197,10 +200,18 @@ impl Virtual {
         })
         .ok();
         let session = watch_session(Arc::clone(&power), Arc::downgrade(&server));
+        let worker_server = Arc::downgrade(&server);
         std::thread::Builder::new()
             .name("mixercraft-virtual-attach".into())
             .spawn(move || {
-                attach_worker(&rx, &worker_labels, &worker_changed, DefaultMemory::load(memory_file), &power);
+                attach_worker(
+                    &rx,
+                    &worker_labels,
+                    &worker_changed,
+                    DefaultMemory::load(memory_file),
+                    &power,
+                    &worker_server,
+                );
             })
             .map_err(|e| e.to_string())?;
         Ok(Self { server, jobs, labels, labels_changed, _power: watch, _session: session })
@@ -374,6 +385,8 @@ struct Pending {
     job: Job,
     /// When the worker first could have connected it.
     waiting_since: Option<Instant>,
+    /// Not before this (a failed attach during a repair).
+    retry_at: Option<Instant>,
 }
 
 /// Whether the worker may connect devices.
@@ -396,12 +409,129 @@ const OLD_COPY_TIMEOUT: Duration = Duration::from_secs(20);
 /// Clock tolerance when comparing Windows' arrival time with ours.
 const ARRIVAL_SLACK: Duration = Duration::from_secs(2);
 
-const OLD_COPY_STUCK: &str = "Windows still holds an earlier copy of this virtual device, so applications \
-cannot use it (this can happen after shutting down with Fast Startup, or around sleep). Restart Windows \
-(Restart, not Shut down) to fix it; MixerCraft keeps trying meanwhile.";
-const NOT_RENEWED: &str = "Windows did not set up this virtual device again and still uses an earlier copy, so \
-applications cannot use it (this can happen after shutting down with Fast Startup, or around sleep). \
-Restart Windows (Restart, not Shut down) to fix it; MixerCraft keeps trying meanwhile.";
+/// A device whose old copy stays this long (or that Windows does not
+/// detect again within it) counts as blocked by a stale copy.
+const STALE_AFTER: Duration = Duration::from_secs(3);
+/// After starting a repair: the controller restarts; failed attaches are
+/// retried quietly for this long.
+const REPAIR_WINDOW: Duration = Duration::from_secs(30);
+/// No automatic repair sooner than this after the previous one.
+const REPAIR_COOLDOWN: Duration = Duration::from_secs(120);
+/// How often the helper's presence is checked while devices are blocked.
+const HELPER_CHECK: Duration = Duration::from_secs(10);
+
+const STUCK_NO_HELPER: &str = "Windows still holds an earlier copy of this virtual device (this happens after \
+\"Shut down\" with Fast Startup), so applications cannot use it. Click \"Repair\" in MixerCraft (it asks once for \
+administrator rights; afterwards MixerCraft repairs this by itself), or restart Windows.";
+const STUCK_AFTER_REPAIR: &str = "Windows still holds an earlier copy of this virtual device although MixerCraft \
+restarted the virtual USB controller, so applications cannot use it. Restart Windows (Restart, not Shut \
+down); MixerCraft keeps trying meanwhile.";
+const RESTART_PENDING: &str = "Windows finishes restarting the virtual USB controller only when it restarts: \
+restart Windows (Restart, not Shut down) to get the virtual devices back.";
+/// Longest wait for Windows to remove the devices unplugged before a repair.
+const UNPLUG_WAIT: Duration = Duration::from_secs(5);
+/// Longest wait for the repair helper to finish.
+const HELPER_WAIT: Duration = Duration::from_secs(60);
+
+/// The message for a device that stays blocked.
+fn stuck_message() -> &'static str {
+    let h = health();
+    if h.status.restart_pending {
+        RESTART_PENDING
+    } else if h.last_repair.is_some() {
+        STUCK_AFTER_REPAIR
+    } else {
+        STUCK_NO_HELPER
+    }
+}
+
+/// What the engine knows about virtual devices blocked by stale copies.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RepairStatus {
+    /// Windows holds earlier copies that block virtual devices.
+    pub stale_copies: bool,
+    /// The repair helper is set up.
+    pub helper_installed: bool,
+    /// A repair is under way.
+    pub repairing: bool,
+    /// The controller restart finishes only when Windows restarts.
+    pub restart_pending: bool,
+}
+
+#[derive(Default)]
+struct Health {
+    status: RepairStatus,
+    /// When the helper's presence was last checked.
+    helper_checked: Option<Instant>,
+    repair_requested: bool,
+    last_repair: Option<Instant>,
+    repairing_until: Option<Instant>,
+}
+
+static HEALTH: Mutex<Health> = Mutex::new(Health {
+    status: RepairStatus { stale_copies: false, helper_installed: false, repairing: false, restart_pending: false },
+    helper_checked: None,
+    repair_requested: false,
+    last_repair: None,
+    repairing_until: None,
+});
+
+fn health() -> std::sync::MutexGuard<'static, Health> {
+    HEALTH.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Stale-copy state of the virtual devices (`None` where they are not USB
+/// devices, i.e. not on Windows).
+#[must_use]
+pub fn repair_status() -> Option<RepairStatus> {
+    cfg!(windows).then(|| health().status)
+}
+
+/// Asks the engine to run the repair helper now (e.g. right after the user
+/// set it up).
+pub fn request_repair() {
+    let mut h = health();
+    h.repair_requested = true;
+    h.helper_checked = None;
+}
+
+/// Whether an automatic repair may start: blocked devices, the helper is
+/// there, none is running and the last one is long enough ago.
+fn repair_due(stale: bool, helper: bool, last: Option<Instant>, repairing: bool, now: Instant) -> bool {
+    stale && helper && !repairing && last.is_none_or(|t| now.saturating_duration_since(t) >= REPAIR_COOLDOWN)
+}
+
+/// Updates the health after one worker pass (`stale`: a device was seen
+/// blocked; `renewed`: one was set up fresh, which clears the state); returns
+/// `true` when the caller should start the helper (now marked as repairing).
+fn after_pass(stale: bool, renewed: bool, now: Instant) -> bool {
+    let mut h = health();
+    let stale = stale || (h.status.stale_copies && !renewed);
+    let repairing = h.repairing_until.is_some_and(|t| now < t);
+    let check_due = h.helper_checked.is_none_or(|t| now.saturating_duration_since(t) >= HELPER_CHECK);
+    if (stale || h.repair_requested) && check_due {
+        drop(h);
+        let installed = repair::installed();
+        h = health();
+        h.status.helper_installed = installed;
+        h.helper_checked = Some(now);
+    }
+    let requested = std::mem::take(&mut h.repair_requested) && h.status.helper_installed && !repairing;
+    // Another restart cannot help until Windows has restarted.
+    let start = !h.status.restart_pending
+        && (requested || repair_due(stale, h.status.helper_installed, h.last_repair, repairing, now));
+    if start {
+        h.last_repair = Some(now);
+        h.repairing_until = Some(now + REPAIR_WINDOW);
+    }
+    h.status.stale_copies = stale;
+    h.status.repairing = start || repairing;
+    start
+}
+
+fn repairing(now: Instant) -> bool {
+    health().repairing_until.is_some_and(|t| now < t)
+}
 
 fn attach_allowed(state: PowerState, now: Instant) -> bool {
     match state {
@@ -614,6 +744,7 @@ fn attach_worker(
     labels_changed: &AtomicBool,
     mut memory: DefaultMemory,
     power: &Mutex<PowerState>,
+    server: &Weak<Server>,
 ) {
     let mut watched: Vec<Watched> = Vec::new();
     let mut pending: Vec<Pending> = Vec::new();
@@ -627,21 +758,36 @@ fn attach_worker(
         let busy = saved.is_some() || !pending.is_empty();
         let tick = if busy { Duration::from_millis(50) } else { Duration::from_millis(250) };
         match rx.recv_timeout(tick) {
-            Ok(job) => pending.push(Pending { job, waiting_since: None }),
+            Ok(job) => pending.push(Pending { job, waiting_since: None, retry_at: None }),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
         }
         let state = *power.lock().unwrap_or_else(PoisonError::into_inner);
-        if attach_allowed(state, Instant::now()) {
+        let now = Instant::now();
+        let in_repair = repairing(now);
+        let mut stale = false;
+        let mut renewed = false;
+        if attach_allowed(state, now) {
             for mut p in std::mem::take(&mut pending) {
                 if p.job.watch.removed() {
                     continue;
                 }
-                let waited = p.waiting_since.get_or_insert_with(Instant::now).elapsed();
-                match readiness(windows_state(p.job.watch.serial()), waited) {
+                if p.retry_at.is_some_and(|t| now < t) {
+                    pending.push(p);
+                    continue;
+                }
+                let waited = p.waiting_since.get_or_insert(now).elapsed();
+                let ready = readiness(windows_state(p.job.watch.serial()), waited);
+                if ready != Readiness::Attach && waited >= STALE_AFTER {
+                    stale = true;
+                }
+                match ready {
                     Readiness::Wait => pending.push(p),
+                    // Give a repair its chance before giving up.
+                    Readiness::Stuck if in_repair => pending.push(p),
                     Readiness::Stuck => {
-                        (p.job.on_error)(StreamFault { kind: FaultKind::DeviceLost, message: OLD_COPY_STUCK.into() });
+                        let message = stuck_message();
+                        (p.job.on_error)(StreamFault { kind: FaultKind::DeviceLost, message: message.into() });
                     }
                     Readiness::Attach => {
                         let Job { watch, mut on_error } = p.job;
@@ -651,6 +797,12 @@ fn attach_worker(
                         }
                         let attached_at = SystemTime::now();
                         match attach(watch.busid()) {
+                            // The controller is restarting: try again shortly.
+                            Err(_) if repairing(Instant::now()) => pending.push(Pending {
+                                job: Job { watch, on_error },
+                                waiting_since: None,
+                                retry_at: Some(Instant::now() + Duration::from_secs(1)),
+                            }),
                             Ok(()) => {
                                 if let Some((_, until, _)) = saved.as_mut() {
                                     *until = Instant::now() + RESTORE_WINDOW;
@@ -691,9 +843,13 @@ fn attach_worker(
                 if !w.renewed {
                     if arrived_since(windows_state(w.watch.serial()), w.attached_at) {
                         w.renewed = true;
-                    } else if w.since.elapsed() > IMPORT_TIMEOUT {
-                        (w.on_error)(StreamFault { kind: FaultKind::DeviceLost, message: NOT_RENEWED.into() });
+                        renewed = true;
+                    } else if w.since.elapsed() > IMPORT_TIMEOUT && !repairing(Instant::now()) {
+                        let message = stuck_message();
+                        (w.on_error)(StreamFault { kind: FaultKind::DeviceLost, message: message.into() });
                         return false;
+                    } else if w.since.elapsed() >= STALE_AFTER {
+                        stale = true;
                     }
                 }
                 return true;
@@ -708,6 +864,36 @@ fn attach_worker(
             (w.on_error)(StreamFault { kind: FaultKind::DeviceLost, message: message.into() });
             false
         });
+        if after_pass(stale, renewed, Instant::now()) {
+            // Unplug our own devices first and let Windows remove them:
+            // Windows refuses to restart the controller while an application
+            // (the audio engine) has a device on it open, and then finishes
+            // the restart only when Windows restarts (seen on hardware).
+            // Nothing is connected until the helper has finished.
+            let unplugged = server.upgrade().map(|s| s.unplug_all()).unwrap_or_default();
+            wait_until_removed(&unplugged, UNPLUG_WAIT);
+            let result = repair::run_and_wait(HELPER_WAIT);
+            let mut h = health();
+            match result {
+                Ok(0) => h.repairing_until = Some(Instant::now() + REPAIR_WINDOW),
+                Ok(code) => {
+                    h.repairing_until = None;
+                    h.status.restart_pending = repair::needs_windows_restart(code);
+                }
+                // Removed or not startable: the blocked devices report it.
+                Err(_) => {
+                    h.repairing_until = None;
+                    h.helper_checked = None;
+                }
+            }
+            h.status.repairing = h.repairing_until.is_some();
+            drop(h);
+            // Every device on the controller was dropped; the blocked ones
+            // get a fresh 20 s to come back before they are reported.
+            for p in &mut pending {
+                p.waiting_since = None;
+            }
+        }
     }
 }
 
@@ -734,6 +920,17 @@ mod tests {
         assert!(attach_allowed(PowerState::Resumed(now), now + RESUME_SETTLE));
         // Sign-out or shutdown: never again in this session.
         assert!(!attach_allowed(PowerState::Ending, now + Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn repairs_start_only_when_useful() {
+        let now = Instant::now();
+        assert!(repair_due(true, true, None, false, now));
+        assert!(!repair_due(false, true, None, false, now), "nothing blocked");
+        assert!(!repair_due(true, false, None, false, now), "no helper");
+        assert!(!repair_due(true, true, None, true, now), "one is running");
+        assert!(!repair_due(true, true, Some(now), false, now + Duration::from_secs(10)), "cooldown");
+        assert!(repair_due(true, true, Some(now), false, now + REPAIR_COOLDOWN));
     }
 
     #[test]

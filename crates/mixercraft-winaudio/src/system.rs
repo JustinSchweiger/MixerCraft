@@ -104,6 +104,16 @@ pub fn watch_session_end(on_event: impl Fn(SessionEvent) + Send + Sync + 'static
     imp::session_window(Box::new(on_event)).map(|w| SessionWatch { _window: w })
 }
 
+/// Runs `program` as administrator (Windows asks the user) and waits for
+/// it. `parameters` is the whole command line after the program, already
+/// quoted. Returns its exit code, or `None` if the user said no.
+///
+/// # Errors
+/// If Windows cannot start it, or [`Error::Unsupported`] off Windows.
+pub fn run_elevated(program: &std::path::Path, parameters: &str) -> Result<Option<u32>, Error> {
+    imp::run_elevated(program, parameters)
+}
+
 /// Converts a Windows `FILETIME` (100 ns ticks since 1601) to a time.
 #[must_use]
 pub fn filetime_to_system_time(ticks: u64) -> Option<SystemTime> {
@@ -234,6 +244,50 @@ mod imp {
     }
 
     pub(super) use session::{SessionWindow, session_window};
+
+    pub(super) fn run_elevated(program: &std::path::Path, parameters: &str) -> Result<Option<u32>, Error> {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::Win32::Foundation::{CloseHandle, ERROR_CANCELLED};
+        use windows::Win32::System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject};
+        use windows::Win32::UI::Shell::{
+            SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+        let file: Vec<u16> = program.as_os_str().encode_wide().chain(Some(0)).collect();
+        let params: Vec<u16> = parameters.encode_utf16().chain(Some(0)).collect();
+        let mut info = SHELLEXECUTEINFOW {
+            cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+            fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC,
+            lpVerb: windows_core::w!("runas"),
+            lpFile: PCWSTR(file.as_ptr()),
+            lpParameters: PCWSTR(params.as_ptr()),
+            nShow: SW_HIDE.0,
+            ..Default::default()
+        };
+        // SAFETY: `info` is fully initialised; `file` and `params` are
+        // NUL-terminated and outlive the call.
+        if let Err(e) = unsafe { ShellExecuteExW(&raw mut info) } {
+            if e.code() == windows_core::HRESULT::from_win32(ERROR_CANCELLED.0) {
+                return Ok(None);
+            }
+            return Err(Error::Com(format!("cannot start {} as administrator: {e}", program.display())));
+        }
+        if info.hProcess.is_invalid() {
+            return Err(Error::Com("no process handle from ShellExecuteExW".into()));
+        }
+        let mut code = 0u32;
+        // SAFETY: `hProcess` is the valid handle Windows returned
+        // (SEE_MASK_NOCLOSEPROCESS); it is closed exactly once below.
+        let r = unsafe {
+            WaitForSingleObject(info.hProcess, INFINITE);
+            let r = GetExitCodeProcess(info.hProcess, &raw mut code);
+            let _ = CloseHandle(info.hProcess);
+            r
+        };
+        r.map_err(|e| Error::Com(format!("GetExitCodeProcess failed: {e}")))?;
+        Ok(Some(code))
+    }
 
     #[cfg(test)]
     pub(super) fn session_class() -> windows_core::PCWSTR {
@@ -381,6 +435,10 @@ mod imp {
     pub(crate) struct SessionWindow;
 
     pub(super) fn session_window(_on_event: OnSession) -> Result<SessionWindow, Error> {
+        Err(Error::Unsupported)
+    }
+
+    pub(super) fn run_elevated(_program: &std::path::Path, _parameters: &str) -> Result<Option<u32>, Error> {
         Err(Error::Unsupported)
     }
 

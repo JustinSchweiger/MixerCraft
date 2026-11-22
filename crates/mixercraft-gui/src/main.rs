@@ -413,8 +413,49 @@ fn sync_rows(current: ModelRc<StripView>, fresh: Vec<StripView>, bus: bool) -> O
     None
 }
 
+/// What the repair banner shows (see `repair-state` in `main.slint`).
+fn repair_state(r: Option<mixercraft_ipc::VirtualRepair>) -> i32 {
+    match r {
+        Some(r) if r.restart_pending => 4,
+        Some(r) if r.repairing => 2,
+        Some(r) if r.stale_copies && r.helper_installed => 3,
+        Some(r) if r.stale_copies => 1,
+        _ => 0,
+    }
+}
+
+/// Sets up the repair helper (Windows asks for administrator rights; the
+/// `mixercraft` command-line program next to this app does the elevated
+/// part), then lets the engine repair right away.
+fn install_repair_helper(ui: &MainWindow, tx: mpsc::Sender<Cmd>) {
+    ui.set_repair_busy(true);
+    let w = ui.as_weak();
+    std::thread::spawn(move || {
+        let result = std::env::current_exe()
+            .map_err(|e| format!("cannot locate this program: {e}"))
+            .map(|exe| exe.with_file_name(format!("mixercraft{}", std::env::consts::EXE_SUFFIX)))
+            .and_then(|cli| mixercraft_platform::repair::install_elevated(&cli));
+        if result == Ok(true) {
+            let _ = tx.send(Cmd::RepairVirtualDevices);
+        }
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = w.upgrade() else { return };
+            ui.set_repair_busy(false);
+            match result {
+                Ok(true) => {}
+                Ok(false) => show_notice(&ui, "Repair cancelled: Windows did not get administrator rights.".into()),
+                Err(e) => show_notice(&ui, format!("Repair failed: {e}")),
+            }
+        });
+    });
+}
+
 fn apply_status(ui: &MainWindow, s: &EngineStatus) {
     ui.set_connected(true);
+    let repair = repair_state(s.virtual_repair);
+    if ui.get_repair_state() != repair {
+        ui.set_repair_state(repair);
+    }
     apply_engine_settings(ui, s);
     apply_devices(ui, None, Some(s.virtual_devices));
     let available = s.noise_suppression_available == Some(true);
@@ -1138,6 +1179,13 @@ fn main() -> Result<(), slint::PlatformError> {
     let t = tx.clone();
     ui.on_start_engine(move || {
         let _ = t.send(Cmd::StartEngine);
+    });
+    let w = ui.as_weak();
+    let t = tx.clone();
+    ui.on_repair_virtual_devices(move || {
+        if let Some(ui) = w.upgrade() {
+            install_repair_helper(&ui, t.clone());
+        }
     });
     let w = ui.as_weak();
     let t = tx.clone();

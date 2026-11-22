@@ -71,37 +71,40 @@ Chosen because it costs nothing and needs no kernel code of our own
   `--receive-mode low-latency` when the installed client offers it
   (`attach --help`); completing transfers earlier did not help.
 * Shutdown, sleep and reconnects: Windows must remove a device's old copy
-  before it can detect the device again. On the owner's PC, "Shut down"
-  with Fast Startup (Windows signs the user out, then hibernates the
-  kernel; `Kernel-Boot` 27 reports boot type 0x1 afterwards) twice left
-  all virtual devices broken: Windows dropped them about 2 s into the
-  shutdown while the engine still ran, the engine reconnected them 0.5 s
-  later, then was terminated, and Windows saved copies it never finished
-  removing. After the next start the endpoints stayed "present" with their
-  arrival time from the evening before and no removal time, every
-  `IAudioClient::Initialize` failed with `AUDCLNT_E_DEVICE_INVALIDATED`,
-  and nothing short of a real restart helped: not an engine restart, not
-  `usbip detach`, and not a user-mode eject (`CM_Request_Device_Eject`
-  succeeded, but the USB device then sat in problem 47 "held for eject" and
-  detaching its port did not remove it; usbip-win2's hub still reported
-  it). Therefore:
-  1. The engine has a hidden top-level window
-     (`mixercraft-winaudio::watch_session_end`); without one Windows ends a
-     windowless process at sign-out without any message. At
-     `WM_QUERYENDSESSION` the attach worker stops connecting devices (and
-     resumes if the shutdown is cancelled); at `WM_ENDSESSION` the engine
-     disconnects every client (`Server::unplug_all`) and waits up to 4 s
-     until Windows no longer has the devices present (an isolated test
-     engine: removed in 59 ms, with a removal time, and not reconnected).
-  2. Nothing is connected between the suspend notification and 3 s after
+  before it can detect the device again. After "Shut down" with Fast
+  Startup (sign-out, then hibernation of Windows itself; `Kernel-Boot` 27
+  reports boot type 0x1 at the next start), usbip-win2 starts with an empty
+  port table while Windows still has the previous session's devices plugged
+  into ports 1–3 of its virtual hub: present, with the previous session's
+  arrival time and no removal time. Applications get
+  `AUDCLNT_E_DEVICE_INVALIDATED`, and anything attached to those ports is
+  ignored, even a device Windows never saw (a test device on port 4, behind
+  placeholders on 1–3, worked at once). A normal user cannot remove the
+  stale copies (`usbip detach`, `CM_Request_Device_Eject` → problem 47,
+  `CM_Reenumerate_DevNode` → access denied); restarting the virtual host
+  controller (`pnputil /restart-device /deviceid ROOT\USBIP_WIN2\UDE`) does,
+  and the devices come back with their identities. So (ADR 0012):
+  1. A device whose old copy stays present for 3 s, or that Windows does
+     not detect again after an attach (`LastArrivalDate` older than the
+     attach, Configuration Manager via `mixercraft-winaudio::device_state`),
+     counts as blocked. The worker then starts the repair helper
+     (`crate::repair`: Task Scheduler task "MixerCraft Repair Virtual
+     Devices", that `pnputil` command as SYSTEM, startable by the user who
+     set it up), at most every 2 minutes. Before that it unplugs its own
+     devices and waits for Windows to remove them (an open device makes the
+     audio engine veto the restart, which then waits for a Windows restart),
+     waits for the task's result, and afterwards retries failed attaches
+     quietly for 30 s. Results 3010/50 ("restart pending") stop further
+     repairs and are reported.
+  2. Without the helper, a blocked device is reported as failed after 20 s
+     with a message that says how to set it up; the status
+     (`EngineStatus::virtual_repair`) makes the app show a Repair banner.
+  3. At sign-out and shutdown the engine (hidden top-level window,
+     `mixercraft-winaudio::watch_session_end`) stops connecting devices and
+     unplugs them (`Server::unplug_all`, waiting up to 4 s for the removal).
+     This alone did not prevent the stale copies (0.3.0, seen on hardware).
+  4. Nothing is connected between the suspend notification and 3 s after
      resuming (`PowerRegisterSuspendResumeNotification`).
-  3. A device is attached only when Windows no longer has its serial number
-     present; after 20 s of waiting it is reported as failed ("restart
-     Windows (Restart, not Shut down)").
-  4. After the import the worker checks that the device's `LastArrivalDate`
-     is newer than the attach (Configuration Manager,
-     `mixercraft-winaudio::device_state`), otherwise reports it the same
-     way.
 * The default-device guard only undoes a switch to an endpoint that did not
   exist before the attach; switches to known endpoints are the user's own
   default returning and are left alone.

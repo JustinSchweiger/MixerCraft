@@ -54,6 +54,8 @@ pub enum Cmd {
     HotkeyFeedback(mixercraft_ipc::HotkeyFeedback),
     /// Runs a shortcut as if its keys were pressed (`true`) or released.
     TriggerHotkey(u32, bool),
+    /// Windows: run the virtual device repair helper now.
+    RepairVirtualDevices,
     StartEngine,
     /// Sent by the tray menu (Windows and macOS only).
     #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
@@ -121,6 +123,7 @@ fn request_for(cmd: &Cmd) -> Option<Request> {
         Cmd::RemoveHotkey(id) => Request::RemoveHotkey { id },
         Cmd::HotkeyFeedback(feedback) => Request::SetHotkeyFeedback { feedback },
         Cmd::TriggerHotkey(id, pressed) => Request::TriggerHotkey { id, pressed },
+        Cmd::RepairVirtualDevices => Request::RepairVirtualDevices,
         Cmd::StopEngine => Request::Shutdown,
         Cmd::StartEngine | Cmd::RestartEngine => return None,
     })
@@ -241,6 +244,7 @@ pub fn run(rx: &Receiver<Cmd>, deliver: &dyn Fn(Update)) {
                     | Cmd::RemoveHotkey(_)
                     | Cmd::HotkeyFeedback(_)
                     | Cmd::TriggerHotkey(..)
+                    | Cmd::RepairVirtualDevices
             );
             match c.request(&req) {
                 Ok(_) => {
