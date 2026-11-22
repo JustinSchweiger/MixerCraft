@@ -41,7 +41,7 @@ use mixercraft_core::mixer::{BusSpec, Mixer, MixerCommand, MixerLayout, MixerMet
 use mixercraft_core::stats::FifoStats;
 use mixercraft_ipc::{
     BusStatus, DeviceChoice, DeviceStatus, DeviceSummary, EngineSettings, EngineState, EngineStatus, ErrorCode,
-    FifoStatus, LatencyProfile, Level, MeterSnapshot, RecoveryEvent, Request, Response, StripStatus,
+    FifoStatus, LatencyProfile, Level, MeterSnapshot, RecoveryEvent, Request, Response, StripStatus, VirtualRepair,
 };
 use mixercraft_platform::{AudioSystem, DeviceSelector, FaultKind, OpenStream, StreamFault, StreamInfo, StreamRequest};
 use tracing::{debug, error, info, warn};
@@ -1262,6 +1262,13 @@ impl Supervisor {
                     Err(_) => Response::Error { code: ErrorCode::Busy, message: "engine command queue full".into() },
                 };
             }
+            Request::RepairVirtualDevices => {
+                if mixercraft_platform::virtual_dev::repair_status().is_none() {
+                    return invalid("virtual devices need no repair on this platform");
+                }
+                mixercraft_platform::virtual_dev::request_repair();
+                return Response::Ok;
+            }
             Request::SetHotkey { hotkey } => return self.set_hotkey(&hotkey),
             Request::RemoveHotkey { id } => return self.remove_hotkey(id),
             Request::SetHotkeyFeedback { feedback } => return self.set_hotkey_feedback(feedback),
@@ -1518,6 +1525,11 @@ impl Supervisor {
             restart_required: self.restart_required(),
             config_path: self.config_path.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
             hotkeys: Some(self.hotkeys.status(&self.config)),
+            virtual_repair: mixercraft_platform::virtual_dev::repair_status().map(|r| VirtualRepair {
+                stale_copies: r.stale_copies,
+                helper_installed: r.helper_installed,
+                repairing: r.repairing,
+            }),
         }
     }
 }

@@ -18,6 +18,7 @@ pub mod autostart;
 pub mod capabilities;
 #[cfg(target_os = "linux")]
 mod pipewire_dev;
+pub mod repair;
 pub mod virtual_dev;
 
 /// The virtual-device backend of this platform: PipeWire nodes on Linux,

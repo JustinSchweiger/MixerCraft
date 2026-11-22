@@ -102,6 +102,10 @@ pub enum Request {
     /// Runs a shortcut's action as if its keys were pressed (`pressed:
     /// true`) or released. Also how the engine's own key listener reports.
     TriggerHotkey { id: u32, pressed: bool },
+    /// Windows: runs the repair helper now (restarts usbip-win2's virtual
+    /// USB controller so Windows drops stale copies of virtual devices),
+    /// e.g. right after the user set it up ([`VirtualRepair`]).
+    RepairVirtualDevices,
 }
 
 /// The engine's answer to a [`Request`].
@@ -197,6 +201,24 @@ pub struct EngineStatus {
     pub config_path: String,
     /// Global keyboard shortcuts. `None`: the engine predates them.
     pub hotkeys: Option<HotkeysStatus>,
+    /// Windows: virtual devices blocked by stale copies (after Fast
+    /// Startup) and their repair. `None`: not Windows, or an engine that
+    /// predates the repair.
+    pub virtual_repair: Option<VirtualRepair>,
+}
+
+/// Virtual devices blocked by stale copies Windows keeps after "Shut down"
+/// with Fast Startup, and the helper that repairs that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct VirtualRepair {
+    /// Windows holds earlier copies that keep virtual devices from working.
+    pub stale_copies: bool,
+    /// The repair helper (a Task Scheduler task, set up once with
+    /// administrator rights) is there; the engine then repairs by itself.
+    pub helper_installed: bool,
+    /// A repair is under way.
+    pub repairing: bool,
 }
 
 /// A global keyboard shortcut.
@@ -926,6 +948,13 @@ mod tests {
         assert!(!s.restart_required);
         // ... and those before hotkeys.
         assert_eq!(s.hotkeys, None);
+        // ... and those before the virtual device repair.
+        assert_eq!(s.virtual_repair, None);
+        let r: Response = serde_json::from_str(r#"{"type":"status","virtual_repair":{"stale_copies":true}}"#).unwrap();
+        let Response::Status(s) = r else { panic!() };
+        assert_eq!(s.virtual_repair, Some(VirtualRepair { stale_copies: true, ..Default::default() }));
+        let json = serde_json::to_string(&Request::RepairVirtualDevices).unwrap();
+        assert_eq!(json, r#"{"type":"repair_virtual_devices"}"#);
     }
 
     #[test]

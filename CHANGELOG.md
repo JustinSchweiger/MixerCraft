@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Windows: virtual devices still stopped working after "Shut down" with
+  Fast Startup on. The fix in 0.3.0 (unplugging them at sign-out) did not
+  help: usbip-win2 starts with an empty port table while Windows still has
+  the previous session's devices plugged in, and those ports stay blocked
+  until the virtual USB controller restarts. MixerCraft now does that
+  itself: the first time, the app shows a banner with **Repair**, which asks
+  once for administrator rights to set up a small helper (a Task Scheduler
+  task that only restarts usbip-win2's controller); afterwards the engine
+  runs it by itself whenever Windows kept stale copies, and the devices come
+  back within seconds with their usual identities (apps keep their device
+  assignments). Also `mixercraft repair-helper install` and `mixercraft
+  repair`. See ADR 0012.
+
 ## [0.3.0] - 2026-11-21
 
 ### Added

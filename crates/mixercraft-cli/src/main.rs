@@ -141,6 +141,16 @@ enum Cmd {
         #[command(subcommand)]
         action: HotkeyCmd,
     },
+    /// Windows: the helper that repairs virtual devices after "Shut down"
+    /// with Fast Startup (Windows keeps stale copies of them). Set up once
+    /// with administrator rights; the engine then repairs by itself.
+    RepairHelper {
+        #[command(subcommand)]
+        action: RepairCmd,
+    },
+    /// Windows: repair virtual devices now (restarts usbip-win2's virtual
+    /// USB controller through the repair helper).
+    Repair,
     /// Stop the engine.
     Shutdown,
     /// Check the release feed for a newer version (the app does this on
@@ -184,6 +194,24 @@ enum AutostartCmd {
         if_under: Option<std::path::PathBuf>,
     },
     /// Show whether the engine and the desktop app start at sign-in.
+    Status,
+}
+
+#[derive(Debug, Subcommand)]
+enum RepairCmd {
+    /// Set up the helper (Windows asks for administrator rights once).
+    Install {
+        /// Internal: the user the helper is for (the elevated step).
+        #[arg(long, hide = true)]
+        sid: Option<String>,
+    },
+    /// Remove the helper (asks for administrator rights).
+    Remove {
+        /// Internal: see `install`.
+        #[arg(long, hide = true)]
+        sid: Option<String>,
+    },
+    /// Show whether the helper is set up.
     Status,
 }
 
@@ -399,6 +427,40 @@ impl From<OnOff> for bool {
     }
 }
 
+fn repair_helper(action: &RepairCmd) -> anyhow::Result<()> {
+    use mixercraft_platform::repair;
+    anyhow::ensure!(cfg!(windows), "the repair helper is only needed on Windows");
+    match action {
+        RepairCmd::Status => {
+            if repair::installed() {
+                println!("the repair helper is set up (Task Scheduler: \"{}\")", repair::TASK_NAME);
+            } else {
+                println!("the repair helper is not set up (`mixercraft repair-helper install`)");
+            }
+        }
+        // The elevated step: do the work.
+        RepairCmd::Install { sid: Some(sid) } => repair::install(sid).map_err(anyhow::Error::msg)?,
+        RepairCmd::Remove { sid: Some(_) } => repair::remove().map_err(anyhow::Error::msg)?,
+        // Ask Windows for administrator rights and run the step above.
+        RepairCmd::Install { sid: None } | RepairCmd::Remove { sid: None } => {
+            let install = matches!(action, RepairCmd::Install { .. });
+            let me = std::env::current_exe().context("cannot find this program")?;
+            let done = if install { repair::install_elevated(&me) } else { repair::remove_elevated(&me) };
+            anyhow::ensure!(done.map_err(anyhow::Error::msg)?, "cancelled: Windows did not get administrator rights");
+            if install {
+                println!("the repair helper is set up; MixerCraft now repairs virtual devices by itself");
+                // Repair right away if the engine runs and needs it.
+                if let Ok(mut c) = Client::connect("mixercraft-cli") {
+                    let _ = c.request(&Request::RepairVirtualDevices);
+                }
+            } else {
+                println!("the repair helper is removed");
+            }
+        }
+    }
+    Ok(())
+}
+
 fn db(x: f32) -> String {
     if x <= 0.0 { "  -inf".into() } else { format!("{:6.1}", 20.0 * x.log10()) }
 }
@@ -429,6 +491,7 @@ fn main() -> anyhow::Result<()> {
         Cmd::CloseApp { timeout } => return close_app(std::time::Duration::from_secs(*timeout)),
         Cmd::Update { feed, download } => return update(feed.clone(), *download),
         Cmd::Hotkey { action } => return hotkey(action),
+        Cmd::RepairHelper { action } => return repair_helper(action),
         _ => {}
     }
     let mut c =
@@ -491,6 +554,7 @@ fn main() -> anyhow::Result<()> {
             Request::SetBusKeepAwake { bus, keep_awake }
         }
         Cmd::KeepAwakeTest { bus } => Request::TestBusKeepAwake { bus },
+        Cmd::Repair => Request::RepairVirtualDevices,
         Cmd::Shutdown => Request::Shutdown,
         Cmd::Capabilities
         | Cmd::LocalDevices
@@ -498,6 +562,7 @@ fn main() -> anyhow::Result<()> {
         | Cmd::Autostart { .. }
         | Cmd::CloseApp { .. }
         | Cmd::Hotkey { .. }
+        | Cmd::RepairHelper { .. }
         | Cmd::Update { .. } => {
             unreachable!("handled above")
         }
@@ -516,6 +581,17 @@ fn main() -> anyhow::Result<()> {
                 s.overloads,
                 s.skipped_cycles
             );
+            if let Some(r) = s.virtual_repair.filter(|r| r.stale_copies || r.repairing) {
+                if r.repairing {
+                    println!("virtual devices: repairing (restarting the virtual USB controller)");
+                } else if r.helper_installed {
+                    println!("virtual devices: Windows holds stale copies; the repair did not clear them");
+                } else {
+                    println!(
+                        "virtual devices: Windows holds stale copies (after Shut down with Fast Startup);                          run `mixercraft repair-helper install` once, then MixerCraft repairs this by itself"
+                    );
+                }
+            }
             println!("devices:");
             for d in &s.devices {
                 print!("  {:7} {:10} {} ({} Hz, {} ch)", d.role, d.state, d.name, d.sample_rate, d.channels);

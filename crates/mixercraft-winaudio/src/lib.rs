@@ -32,6 +32,8 @@
 //! * The power-notification context is leaked, never freed, so the callback
 //!   can never see a dangling pointer, even while it is being unregistered.
 //!   The callback catches panics so none unwinds into Windows.
+//! * [`run_elevated`] passes `ShellExecuteExW` NUL-terminated buffers that
+//!   outlive the call and closes the returned process handle exactly once.
 //!
 //! On other platforms the functions return [`Error::Unsupported`].
 #![allow(unsafe_code)]
@@ -41,7 +43,7 @@ use std::fmt;
 mod system;
 pub use system::{
     DeviceState, PowerEvent, PowerWatch, SessionEvent, SessionWatch, device_state, filetime_to_system_time,
-    watch_power, watch_session_end,
+    run_elevated, watch_power, watch_session_end,
 };
 
 /// Errors from the Windows APIs.

@@ -128,6 +128,13 @@ export component MainWindow inherits Window {
     in property <string> version;
     // A short message from the engine (e.g. why a request was refused).
     in property <string> notice;
+    // Virtual devices blocked by stale copies (Windows, after Fast Startup):
+    // 0 none, 1 blocked and no repair helper, 2 repairing, 3 still blocked
+    // after a repair.
+    in property <int> repair-state: 0;
+    // Waiting for the administrator prompt.
+    in property <bool> repair-busy;
+    callback repair-virtual-devices();
     in-out property <int> tab: 0;
     in property <UpdateView> update: { state: 0, status: "Updates have not been checked yet." };
     in property <bool> update-auto: true;
@@ -214,6 +221,45 @@ export component MainWindow inherits Window {
                         text: root.notice;
                         color: Theme.text;
                         vertical-alignment: center;
+                    }
+                }
+
+                if root.connected && root.repair-state != 0: Rectangle {
+                    min-height: 40px;
+                    border-radius: 8px;
+                    background: root.repair-state == 2 ? Theme.section : Theme.yellow-bg;
+                    border-width: 1px;
+                    border-color: root.repair-state == 2 ? Theme.section-border : Theme.yellow;
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 8px;
+                        padding-top: 6px;
+                        padding-bottom: 6px;
+                        spacing: 10px;
+                        Text {
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                            wrap: word-wrap;
+                            color: Theme.text;
+                            text: root.repair-state == 2
+                                ? "Repairing the virtual devices: restarting the virtual USB controller…"
+                                : root.repair-state == 3
+                                ? "Windows still holds stale copies of the virtual devices. Restart Windows (Restart, not Shut down)."
+                                : "Windows kept stale copies of the virtual devices after Shut down (Fast Startup), so apps get no sound. Repair asks once for administrator rights; afterwards MixerCraft fixes this by itself.";
+                        }
+                        if root.repair-state == 1: VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
+                            PillButton {
+                                text: root.repair-busy ? "Waiting for Windows…" : "Repair";
+                                active: true;
+                                clicked => {
+                                    if !root.repair-busy {
+                                        root.repair-virtual-devices();
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
