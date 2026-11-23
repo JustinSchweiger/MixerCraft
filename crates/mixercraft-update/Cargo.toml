@@ -16,7 +16,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 semver = "1.0.28"
-sha2 = "0.10"
+sha2 = "0.11"
 # HTTPS with rustls (ring) and the operating system's certificate store; no
 # OpenSSL and no bundled root list.
 ureq = { version = "3.1", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
