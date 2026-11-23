@@ -575,6 +575,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "audio_thread_priority"
+version = "0.38.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0b30b2f3d2da482d0faeaafd8f88a38fbc62abb58d3b402cfa195793f4c92ab"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "log",
+ "mach2 0.4.3",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -631,7 +644,7 @@ dependencies = [
  "regex",
  "rustc-hash 2.1.3",
  "shlex 2.0.1",
- "syn 2.0.119",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1128,7 +1141,7 @@ checksum = "6f02e8d0327b42d3e2e4ab2119af397344eb9fc54a34bf0ddeaa1277af8681f1"
 dependencies = [
  "alsa",
  "alsa-sys",
- "audio_thread_priority",
+ "audio_thread_priority 0.35.1",
  "block2 0.6.2",
  "coreaudio-rs",
  "dasp_sample",
@@ -3373,7 +3386,7 @@ name = "mixercraft-engine"
 version = "0.3.2"
 dependencies = [
  "anyhow",
- "audio_thread_priority",
+ "audio_thread_priority 0.38.0",
  "clap",
  "ctrlc",
  "mixercraft-config",
@@ -3428,7 +3441,7 @@ dependencies = [
 name = "mixercraft-platform"
 version = "0.3.2"
 dependencies = [
- "audio_thread_priority",
+ "audio_thread_priority 0.38.0",
  "cpal",
  "mixercraft-usbip",
  "mixercraft-winaudio",
@@ -3455,7 +3468,7 @@ dependencies = [
 name = "mixercraft-usbip"
 version = "0.3.2"
 dependencies = [
- "audio_thread_priority",
+ "audio_thread_priority 0.38.0",
  "mixercraft-winaudio",
 ]
 
