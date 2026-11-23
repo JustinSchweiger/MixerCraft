@@ -42,7 +42,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 # `realtime`: WASAPI/ALSA callback threads join the OS real-time audio class
 # (MMCSS on Windows); without it a CPU spike delays the engine.
 cpal = { version = "0.18.2", features = ["realtime"] }
-audio_thread_priority = { version = "0.35", default-features = false }
+audio_thread_priority = { version = "0.38", default-features = false }
 directories = "6.0.0"
 interprocess = "2.2"
 rtrb = "0.4.1"
